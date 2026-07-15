@@ -11,7 +11,8 @@ public class DemoApplication {
 		for(int i = 0;i<=10;i++){
 			System.out.print(i);
 		}
-		System.out.print(".");
+		System.out.println(".");
+		System.out.print("Hello word.");
 	}
 
 }
