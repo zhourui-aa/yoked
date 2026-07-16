@@ -1,0 +1,14 @@
+2026-07-16 10:31:29 [INFO] ==================================================
+2026-07-16 10:31:29 [INFO] 天气查询控制台程序启动
+2026-07-16 10:31:29 [INFO] 版本: 1.1.0
+2026-07-16 10:31:29 [INFO] ==================================================
+2026-07-16 10:31:29 [INFO] WeatherService 初始化完成 (API Host: kx3jpj749m.re.qweatherapi.com)
+2026-07-16 10:31:29 [INFO] 天气服务初始化成功
+2026-07-16 10:31:40 [INFO] 搜索城市: 杭州
+2026-07-16 10:31:40 [INFO] HTTP请求: https://kx3jpj749m.re.qweatherapi.com/geo/v2/city/lookup (尝试 1/3)
+2026-07-16 10:31:41 [INFO] 请求成功: https://kx3jpj749m.re.qweatherapi.com/geo/v2/city/lookup
+2026-07-16 10:31:41 [INFO] 找到城市: 杭州 (ID: 101210101)
+2026-07-16 10:31:41 [INFO] 查询天气: 杭州 (ID: 101210101)
+2026-07-16 10:31:41 [INFO] HTTP请求: https://kx3jpj749m.re.qweatherapi.com/v7/weather/now (尝试 1/3)
+2026-07-16 10:31:41 [INFO] 请求成功: https://kx3jpj749m.re.qweatherapi.com/v7/weather/now
+2026-07-16 10:31:41 [INFO] 天气查询成功: 杭州 - 多云 35°C
