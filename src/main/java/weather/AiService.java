@@ -13,23 +13,17 @@ import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
 public class AiService {
-    private static final String API_KEY = "sk-ws-H.EDERRRR.G8ME.MEYCIQCQkc1nKAkznZiviFwkMNCWhkhZJta-JgWfpfhJ0jWtNAIhAIY2O8XlHDvK4YHEcq8t6AbbnxaWQjYhSdecSLY-UOA6";      // ← 替换
+    private static final String API_KEY = "sk-ws-H.EDERRRR.G8ME.MEYCIQCQkc1nKAkznZiviFwkMNCWhkhZJta-JgWfpfhJ0jWtNAIhAIY2O8XlHDvK4YHEcq8t6AbbnxaWQjYhSdecSLY-UOA6";
     private static final String BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
     private final String modelName;
 
-    /**
-     * 默认使用 qwen-plus
-     */
     public AiService() {
         this("qwen-plus");
     }
 
-    /**
-     * 指定模型
-     */
     public AiService(String modelName) {
         this.modelName = modelName;
         this.httpClient = new OkHttpClient.Builder()
@@ -72,6 +66,69 @@ public class AiService {
             System.out.println("🤖 调用模型: " + modelName);
             System.out.println("🤖 用户输入: " + userMessage.substring(0, Math.min(50, userMessage.length())) + "...");
 
+            return executeRequest(requestBody);
+
+        } catch (Exception e) {
+            throw new AiException("调用错误: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 分析图片内容（多模态）
+     */
+    public String analyzeImage(String imageUrl, String question) throws AiException {
+        if (imageUrl == null || imageUrl.isEmpty()) {
+            throw new AiException("图片 URL 为空");
+        }
+
+        try {
+            JsonObject requestBody = new JsonObject();
+            // 图片分析必须用视觉模型
+            String visionModel = modelName.contains("vl") ? modelName : "qwen-vl-plus";
+            requestBody.addProperty("model", visionModel);
+
+            JsonArray messages = new JsonArray();
+
+            JsonObject userMsg = new JsonObject();
+            userMsg.addProperty("role", "user");
+
+            // 多模态内容格式：数组包含图片和文字
+            JsonArray content = new JsonArray();
+
+            // 图片部分
+            JsonObject imageContent = new JsonObject();
+            imageContent.addProperty("type", "image_url");
+            JsonObject imageUrlObj = new JsonObject();
+            imageUrlObj.addProperty("url", imageUrl);
+            imageContent.add("image_url", imageUrlObj);
+            content.add(imageContent);
+
+            // 文字部分
+            JsonObject textContent = new JsonObject();
+            textContent.addProperty("type", "text");
+            textContent.addProperty("text", question);
+            content.add(textContent);
+
+            userMsg.add("content", content);
+            messages.add(userMsg);
+
+            requestBody.add("messages", messages);
+
+            System.out.println("🖼️ 分析图片: " + imageUrl.substring(0, Math.min(50, imageUrl.length())) + "...");
+            System.out.println("🖼️ 使用视觉模型: " + visionModel);
+
+            return executeRequest(requestBody);
+
+        } catch (Exception e) {
+            throw new AiException("图片分析错误: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 执行HTTP请求并解析响应
+     */
+    private String executeRequest(JsonObject requestBody) throws AiException {
+        try {
             Request request = new Request.Builder()
                     .url(BASE_URL)
                     .header("Authorization", "Bearer " + API_KEY)
@@ -94,6 +151,10 @@ public class AiService {
                 }
 
                 JsonObject message = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+                if (message == null || !message.has("content")) {
+                    throw new AiException("模型返回格式异常");
+                }
+
                 String content = message.get("content").getAsString();
 
                 System.out.println("✅ 模型回复: " + content.substring(0, Math.min(100, content.length())) + "...");
@@ -102,8 +163,6 @@ public class AiService {
 
         } catch (IOException e) {
             throw new AiException("网络错误: " + e.getMessage());
-        } catch (Exception e) {
-            throw new AiException("调用错误: " + e.getMessage());
         }
     }
 

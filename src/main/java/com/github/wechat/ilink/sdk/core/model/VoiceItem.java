@@ -56,4 +56,8 @@ public class VoiceItem {
   public void setText(String v) {
     text = v;
   }
+
+    public String getUrl() {
+        return "";
+    }
 }
