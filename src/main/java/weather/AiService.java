@@ -14,10 +14,16 @@ import java.util.concurrent.TimeUnit;
 
 public class AiService {
     private static final String API_KEY = "sk-ws-H.EDERRRR.G8ME.MEYCIQCQkc1nKAkznZiviFwkMNCWhkhZJta-JgWfpfhJ0jWtNAIhAIY2O8XlHDvK4YHEcq8t6AbbnxaWQjYhSdecSLY-UOA6";
-    private static final String BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+
+    // 聊天/视觉 API（OpenAI 兼容）
+    private static final String CHAT_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+    // 图片生成 API（万相原生端点）
+    private static final String IMAGE_GEN_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
+
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
+    private final OkHttpClient imageGenClient; // 图片生成用更长超时
     private final String modelName;
 
     public AiService() {
@@ -30,6 +36,11 @@ public class AiService {
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build();
+        // 图片生成可能需要 60-120 秒
+        this.imageGenClient = new OkHttpClient.Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(120, TimeUnit.SECONDS)
+                .build();
         System.out.println("🤖 AiService 初始化，模型: " + modelName);
     }
 
@@ -37,14 +48,26 @@ public class AiService {
         return modelName;
     }
 
+    // ========== 辅助：获取实际聊天模型（画图模型不支持纯文本）==========
+    private String getChatModel() {
+        return modelName.contains("wan2.7-image") ? "qwen-plus" : modelName;
+    }
+
+    private String getVisionModel() {
+        if (modelName.contains("vl")) return modelName;
+        return "qwen-vl-plus";
+    }
+
+    // ==================== 聊天对话 ====================
     public String chat(String userMessage) throws AiException {
         return chatWithSystem(null, userMessage);
     }
 
     public String chatWithSystem(String systemPrompt, String userMessage) throws AiException {
         try {
+            String actualModel = getChatModel();
             JsonObject requestBody = new JsonObject();
-            requestBody.addProperty("model", modelName);
+            requestBody.addProperty("model", actualModel);
 
             JsonArray messages = new JsonArray();
 
@@ -63,19 +86,17 @@ public class AiService {
             requestBody.add("messages", messages);
             requestBody.addProperty("temperature", 0.7);
 
-            System.out.println("🤖 调用模型: " + modelName);
+            System.out.println("🤖 调用模型: " + actualModel);
             System.out.println("🤖 用户输入: " + userMessage.substring(0, Math.min(50, userMessage.length())) + "...");
 
-            return executeRequest(requestBody);
+            return executeChatRequest(requestBody);
 
         } catch (Exception e) {
             throw new AiException("调用错误: " + e.getMessage());
         }
     }
 
-    /**
-     * 分析图片内容（多模态）
-     */
+    // ==================== 图片分析（多模态）====================
     public String analyzeImage(String imageUrl, String question) throws AiException {
         if (imageUrl == null || imageUrl.isEmpty()) {
             throw new AiException("图片 URL 为空");
@@ -83,19 +104,15 @@ public class AiService {
 
         try {
             JsonObject requestBody = new JsonObject();
-            // 图片分析必须用视觉模型
-            String visionModel = modelName.contains("vl") ? modelName : "qwen-vl-plus";
-            requestBody.addProperty("model", visionModel);
+            requestBody.addProperty("model", getVisionModel());
 
             JsonArray messages = new JsonArray();
 
             JsonObject userMsg = new JsonObject();
             userMsg.addProperty("role", "user");
 
-            // 多模态内容格式：数组包含图片和文字
             JsonArray content = new JsonArray();
 
-            // 图片部分
             JsonObject imageContent = new JsonObject();
             imageContent.addProperty("type", "image_url");
             JsonObject imageUrlObj = new JsonObject();
@@ -103,7 +120,6 @@ public class AiService {
             imageContent.add("image_url", imageUrlObj);
             content.add(imageContent);
 
-            // 文字部分
             JsonObject textContent = new JsonObject();
             textContent.addProperty("type", "text");
             textContent.addProperty("text", question);
@@ -115,22 +131,80 @@ public class AiService {
             requestBody.add("messages", messages);
 
             System.out.println("🖼️ 分析图片: " + imageUrl.substring(0, Math.min(50, imageUrl.length())) + "...");
-            System.out.println("🖼️ 使用视觉模型: " + visionModel);
+            System.out.println("🖼️ 使用视觉模型: " + getVisionModel());
 
-            return executeRequest(requestBody);
+            return executeChatRequest(requestBody);
 
         } catch (Exception e) {
             throw new AiException("图片分析错误: " + e.getMessage());
         }
     }
 
+    // ==================== 图片生成（万相 wan2.7-image）====================
     /**
-     * 执行HTTP请求并解析响应
+     * 文生图
+     * @param prompt 图片描述
+     * @param size 尺寸: 1024x1024 / 1280x720 / 720x1280 / 2048x2048(2K) / 4096x4096(4K,仅pro)
+     * @param genModel 生成模型: wan2.7-image / wan2.7-image-pro
+     * @return 生成的图片URL
      */
-    private String executeRequest(JsonObject requestBody) throws AiException {
+    public String generateImage(String prompt, String size, String genModel) throws AiException {
+        if (prompt == null || prompt.isEmpty()) {
+            throw new AiException("图片描述不能为空");
+        }
+
+        try {
+            // DashScope 原生格式请求
+            JsonObject requestBody = new JsonObject();
+            requestBody.addProperty("model", genModel);
+
+            // input.messages
+            JsonObject input = new JsonObject();
+            JsonArray messages = new JsonArray();
+
+            JsonObject userMsg = new JsonObject();
+            userMsg.addProperty("role", "user");
+
+            JsonArray content = new JsonArray();
+            JsonObject textContent = new JsonObject();
+            textContent.addProperty("text", prompt);
+            content.add(textContent);
+
+            userMsg.add("content", content);
+            messages.add(userMsg);
+            input.add("messages", messages);
+            requestBody.add("input", input);
+
+            // parameters
+            JsonObject parameters = new JsonObject();
+            parameters.addProperty("size", size);
+            parameters.addProperty("n", 1);
+            // wan2.7-image-pro 支持 thinking_mode 提升质量
+            if (genModel.contains("pro")) {
+                parameters.addProperty("thinking_mode", true);
+            }
+            requestBody.add("parameters", parameters);
+
+            System.out.println("🎨 生成图片模型: " + genModel);
+            System.out.println("🎨 提示词: " + prompt.substring(0, Math.min(40, prompt.length())) + "...");
+            System.out.println("🎨 尺寸: " + size);
+
+            return executeImageGenRequest(requestBody);
+
+        } catch (Exception e) {
+            throw new AiException("图片生成错误: " + e.getMessage());
+        }
+    }
+
+    // ==================== HTTP 执行方法 ====================
+
+    /**
+     * 执行聊天/视觉请求 (OpenAI 兼容端点)
+     */
+    private String executeChatRequest(JsonObject requestBody) throws AiException {
         try {
             Request request = new Request.Builder()
-                    .url(BASE_URL)
+                    .url(CHAT_URL)
                     .header("Authorization", "Bearer " + API_KEY)
                     .header("Content-Type", "application/json")
                     .post(RequestBody.create(JSON, requestBody.toString()))
@@ -156,9 +230,64 @@ public class AiService {
                 }
 
                 String content = message.get("content").getAsString();
-
                 System.out.println("✅ 模型回复: " + content.substring(0, Math.min(100, content.length())) + "...");
                 return content;
+            }
+
+        } catch (IOException e) {
+            throw new AiException("网络错误: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 执行图片生成请求 (DashScope 原生端点)
+     */
+    private String executeImageGenRequest(JsonObject requestBody) throws AiException {
+        try {
+            Request request = new Request.Builder()
+                    .url(IMAGE_GEN_URL)
+                    .header("Authorization", "Bearer " + API_KEY)
+                    .header("Content-Type", "application/json")
+                    .post(RequestBody.create(JSON, requestBody.toString()))
+                    .build();
+
+            try (Response response = imageGenClient.newCall(request).execute()) {
+                String responseBody = response.body().string();
+
+                if (!response.isSuccessful()) {
+                    throw new AiException("HTTP错误: " + response.code() + ", body=" + responseBody);
+                }
+
+                JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
+
+                // 解析万相响应格式: output.choices[0].message.content[0].image
+                JsonObject output = json.getAsJsonObject("output");
+                if (output == null) {
+                    throw new AiException("响应缺少 output 字段: " + responseBody);
+                }
+
+                JsonArray choices = output.getAsJsonArray("choices");
+                if (choices == null || choices.size() == 0) {
+                    throw new AiException("图片生成返回空结果");
+                }
+
+                JsonObject message = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+                JsonArray content = message.getAsJsonArray("content");
+
+                if (content == null || content.size() == 0) {
+                    throw new AiException("生成结果为空");
+                }
+
+                for (int i = 0; i < content.size(); i++) {
+                    JsonObject item = content.get(i).getAsJsonObject();
+                    if ("image".equals(item.get("type").getAsString())) {
+                        String imageUrl = item.get("image").getAsString();
+                        System.out.println("✅ 图片生成成功: " + imageUrl.substring(0, Math.min(80, imageUrl.length())) + "...");
+                        return imageUrl;
+                    }
+                }
+
+                throw new AiException("响应中未找到图片URL");
             }
 
         } catch (IOException e) {
