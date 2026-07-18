@@ -109,19 +109,32 @@ public class ImageService {
 
     // ==================== 图片识别（图生文）====================
 
-    public void handleImageMessage(String fromUserId, MessageItem item) {
+    /**
+     * 下载解密图片，返回 base64 Data URI，不发送分析
+     */
+    public String handleImageMessageAndReturnBase64(String fromUserId, MessageItem item) {
         try {
             byte[] imageBytes = MediaDownloader.downloadImage(item.getImage_item());
             String dataUri = MediaDownloader.toDataUri(imageBytes, "image/jpeg");
             System.out.println("  🖼️ 图片已解密，Data URI: " + dataUri.substring(0, Math.min(60, dataUri.length())) + "...");
-
-            String analysis = bot.getAiService().analyzeImage(dataUri, "请详细描述这张图片的内容");
-            bot.sendReply(fromUserId, "🖼️ 图片分析：\n" + analysis);
-
+            return dataUri;
         } catch (Exception e) {
-            System.err.println("❌ 图片处理失败: " + e.getMessage());
-            e.printStackTrace();
-            bot.sendReply(fromUserId, "❌ 图片处理失败: " + e.getMessage());
+            System.err.println("❌ 图片下载解密失败: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 带文本追问的图片分析
+     */
+    public String analyzeImageWithText(String fromUserId, String base64Image, String text) {
+        System.out.println("🖼️ 分析图片（带追问）: " + text);
+        System.out.println("🖼️ 使用视觉模型: " + bot.getAiService().getVisionModel());
+        try {
+            return bot.getAiService().analyzeImage(base64Image, text);
+        } catch (Exception e) {
+            System.err.println("❌ 图片分析失败: " + e.getMessage());
+            return "❌ 图片分析失败: " + e.getMessage();
         }
     }
 }

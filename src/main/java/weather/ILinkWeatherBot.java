@@ -13,6 +13,8 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ILinkWeatherBot {
 
@@ -20,19 +22,20 @@ public class ILinkWeatherBot {
     private AiService aiService;
     private ILinkClient client;
     private final ImageService imageService;
+    private final VoiceService voiceService;
+    private final ConcurrentHashMap<String, ImageContext> recentImageContext = new ConcurrentHashMap<>();
 
-    // 可用模型列表
     private static final Map<String, String> AVAILABLE_MODELS = new HashMap<>();
     static {
         AVAILABLE_MODELS.put("qwen-plus", "通义千问-Plus（均衡推荐）");
         AVAILABLE_MODELS.put("qwen-max", "通义千问-Max（最强能力）");
         AVAILABLE_MODELS.put("qwen-turbo", "通义千问-Turbo（快速便宜）");
-        AVAILABLE_MODELS.put("qwen-coder-plus", "通义千问-Coder（编程专用）");
         AVAILABLE_MODELS.put("qwen-vl-plus", "通义千问-VL（图片识别）");
         AVAILABLE_MODELS.put("deepseek-v4-flash", "DeepSeek-V4-Flash（阿里直供）");
         AVAILABLE_MODELS.put("deepseek-v4-pro", "DeepSeek-V4-Pro（阿里直供）");
         AVAILABLE_MODELS.put("kimi-k2.7-code", "Kimi-K2.7-Code（阿里直供）");
         AVAILABLE_MODELS.put("kimi-k2.6", "Kimi-K2.6（阿里直供）");
+        AVAILABLE_MODELS.put("glm-5.2", "智谱 GLM-5.2（1M上下文/编程强）");
         AVAILABLE_MODELS.put("wan2.7-image", "通义万相 2.7（文生图）");
         AVAILABLE_MODELS.put("wan2.7-image-pro", "通义万相 2.7 Pro（高质量）");
     }
@@ -41,6 +44,7 @@ public class ILinkWeatherBot {
         this.weatherService = new WeatherService();
         this.aiService = new AiService("qwen-plus");
         this.imageService = new ImageService(this);
+        this.voiceService = new VoiceService(this);
     }
 
     public void start() throws Exception {
@@ -109,18 +113,17 @@ public class ILinkWeatherBot {
                     }
                 } else if (item.getImage_item() != null) {
                     System.out.println("  🖼️ 图片消息");
-                    imageService.handleImageMessage(fromUserId, item);
+                    String imageBase64 = imageService.handleImageMessageAndReturnBase64(fromUserId, item);
+                    if (imageBase64 != null) {
+                        recentImageContext.put(fromUserId, new ImageContext(imageBase64));
+                        System.out.println("  📝 已缓存图片上下文，等待用户提问...");
+                        // 不再自动分析，等用户发文字追问时再调用视觉模型
+                    }
+
                 } else if (item.getVoice_item() != null) {
                     System.out.println("  🎤 语音消息");
-                    String voiceUrl = extractMediaUrl(item.getVoice_item());
-                    System.out.println("  🎤 URL: " + (voiceUrl != null ? voiceUrl.substring(0, Math.min(50, voiceUrl.length())) : "null"));
                     String voiceText = item.getVoice_item().getText();
-                    if (voiceText != null && !voiceText.isEmpty()) {
-                        System.out.println("  🎤 语音转文字: [" + voiceText + "]");
-                        handleTextMessage(fromUserId, voiceText);
-                    } else {
-                        sendReply(fromUserId, "🎤 收到语音消息，暂时无法处理语音内容~");
-                    }
+                    voiceService.handleVoiceMessage(fromUserId, voiceText);
                 } else if (item.getFile_item() != null) {
                     System.out.println("  📎 文件消息");
                     String fileName = item.getFile_item().getFile_name();
@@ -135,14 +138,28 @@ public class ILinkWeatherBot {
         }
     }
 
-    private void handleTextMessage(String fromUserId, String text) {
-        // 1. 画图命令 → 交给 ImageService
+    void handleTextMessage(String fromUserId, String text) {
+        // 1. 检查是否是图片追问
+        ImageContext ctx = recentImageContext.get(fromUserId);
+        if (ctx != null && !ctx.isExpired() && isImageRelatedQuestion(text)) {
+            System.out.println("  🔗 检测到图片追问，合并处理");
+            String reply = imageService.analyzeImageWithText(fromUserId, ctx.base64Image, text);
+            if (reply != null) {
+                sendReply(fromUserId, reply);
+            }
+            recentImageContext.remove(fromUserId); // 用完清除，避免重复关联
+            return;
+        }
+
+        // 2. 清理过期缓存
+        recentImageContext.entrySet().removeIf(e -> e.getValue().isExpired());
+
+        // 3. 原有逻辑不变
         if (imageService.isDrawCommand(text)) {
             imageService.handleDrawCommand(fromUserId, text);
             return;
         }
 
-        // 2. 模型命令
         String reply = handleModelCommand(text);
         if (reply == null) {
             reply = processCommand(text);
@@ -150,6 +167,15 @@ public class ILinkWeatherBot {
         if (reply != null) {
             sendReply(fromUserId, reply);
         }
+    }
+
+    private boolean isImageRelatedQuestion(String text) {
+        String lower = text.toLowerCase();
+        String[] keywords = {"图片", "图", "照片", "这张", "这个", "什么", "分析", "描述", "里面", "上面", "看下", "看看"};
+        for (String kw : keywords) {
+            if (lower.contains(kw)) return true;
+        }
+        return false;
     }
 
     private String handleModelCommand(String text) {
@@ -184,6 +210,15 @@ public class ILinkWeatherBot {
             } catch (Exception e) {
                 return "❌ 切换失败: " + e.getMessage();
             }
+        }
+
+        if (lower.equals("语音回复 开") || lower.equals("语音开启")) {
+            voiceService.setVoiceReplyEnabled(true);
+            return "🔊 语音回复已开启";
+        }
+        if (lower.equals("语音回复 关") || lower.equals("语音关闭")) {
+            voiceService.setVoiceReplyEnabled(false);
+            return "🔇 语音回复已关闭";
         }
 
         return null;
@@ -317,7 +352,6 @@ public class ILinkWeatherBot {
         return null;
     }
 
-    // ========== 包内可见，供 ImageService 调用 ==========
     AiService getAiService() {
         return aiService;
     }
@@ -328,11 +362,24 @@ public class ILinkWeatherBot {
 
     void sendReply(String toUserId, String message) {
         if (message == null || toUserId == null) return;
-        try {
-            client.sendText(toUserId, message);
-            System.out.println("✅ 回复成功");
-        } catch (Exception e) {
-            System.err.println("❌ 发送失败: " + e.getMessage());
+
+        if (voiceService.isVoiceReplyEnabled() && message.length() < 300) {
+            boolean sent = voiceService.trySendVoice(toUserId, message);
+            if (!sent) {
+                try {
+                    client.sendText(toUserId, message);
+                    System.out.println("✅ 文字 fallback 发送成功");
+                } catch (Exception e) {
+                    System.err.println("❌ 文字发送也失败: " + e.getMessage());
+                }
+            }
+        } else {
+            try {
+                client.sendText(toUserId, message);
+                System.out.println("✅ 回复成功");
+            } catch (Exception e) {
+                System.err.println("❌ 发送失败: " + e.getMessage());
+            }
         }
     }
 
@@ -354,6 +401,20 @@ public class ILinkWeatherBot {
         } catch (Exception e) {
             System.err.println("启动失败: " + e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    private static class ImageContext {
+        final String base64Image;
+        final Instant time;
+
+        ImageContext(String base64Image) {
+            this.base64Image = base64Image;
+            this.time = Instant.now();
+        }
+
+        boolean isExpired() {
+            return Instant.now().isAfter(time.plusSeconds(30));
         }
     }
 }

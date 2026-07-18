@@ -53,7 +53,7 @@ public class AiService {
         return modelName.contains("wan2.7-image") ? "qwen-plus" : modelName;
     }
 
-    private String getVisionModel() {
+    String getVisionModel() {
         if (modelName.contains("vl")) return modelName;
         return "qwen-vl-plus";
     }
@@ -303,6 +303,10 @@ public class AiService {
                 "你是一个专业的天气助手，擅长用通俗易懂的语言解释天气数据，并给出实用的生活建议。",
                 prompt
         );
+    }
+
+    public String chatWithImage(String text, String base64Image) throws AiException {
+        return analyzeImage(base64Image, text);
     }
 
     public static class AiException extends Exception {
