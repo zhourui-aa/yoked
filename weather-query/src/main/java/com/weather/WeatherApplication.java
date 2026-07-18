@@ -20,7 +20,7 @@ public class WeatherApplication {
     private static final Logger log = LoggerFactory.getLogger(WeatherApplication.class);
 
     public static void main(String[] args) {
-        log.info("========== 天气查询系统启动 ==========");
+        log.info("========== 天气查询系统启动 ==========");//打印日志
 
         // ====== 初始化服务 ======
         WeatherService service;
@@ -41,13 +41,14 @@ public class WeatherApplication {
         System.out.println("╚══════════════════════════════╝");
 
         // ====== 交互循环 ======
-        try (Scanner scanner = new Scanner(System.in)) {
+        try (Scanner scanner = new Scanner(System.in)) //读取控制台键盘输入
+        {
             while (true) {
                 System.out.print("\n🌍 请输入城市名 > ");
-                String input = scanner.nextLine().trim();
+                String input = scanner.nextLine().trim();//读取一整行，trim去首尾空格，决定了输入被读取的顺序（控制台显示位置）
 
                 // 退出判断
-                if ("exit".equalsIgnoreCase(input)) {
+                if ("退出".equalsIgnoreCase(input)) {
                     System.out.println("👋 再见！");
                     log.info("用户退出程序");
                     break;
@@ -59,7 +60,13 @@ public class WeatherApplication {
                     printWeather(resp);
                 } catch (WeatherException e) {
                     // 业务异常：城市名空、找不到城市、API失败等
-                    System.err.println("⚠ " + e.getMessage());
+                    System.err.print("⚠ " + e.getMessage() +"，请重新输入!");//因为报错的红色渲染始终让err在下一轮循环开始后才打印到控制台，导致输出错位；这个可以让当前执行代码的线程进入阻塞，暂停指定时长。
+                    try {
+                        Thread.sleep(100);
+                    } catch (InterruptedException ex) //线程睡眠时如果被外部打断会抛出，规范写法需要捕获；
+                    {
+                        Thread.currentThread().interrupt();//恢复线程中断状态，是 Java 线程标准规范写法。
+                    }
                 } catch (Exception e) {
                     // 未预期的系统异常
                     log.error("未预期的异常", e);

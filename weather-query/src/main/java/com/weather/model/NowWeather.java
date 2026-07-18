@@ -6,7 +6,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 /**
  * 对应 API 返回 JSON 中 "now" 字段的实时天气数据
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
+@JsonIgnoreProperties(ignoreUnknown = true)//可以让程序再api返回的数据中碰到没定义的字段可以直接跳过而不会抛出异常
 public class NowWeather {
 
     /** 温度，单位：摄氏度 */

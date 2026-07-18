@@ -38,7 +38,7 @@ public class WeatherService {
     private final ApiConfig config;
 
     public WeatherService() {
-        this.config = new ApiConfig();
+        this.config = new   ApiConfig();
         log.info("WeatherService 初始化完成");
     }
 

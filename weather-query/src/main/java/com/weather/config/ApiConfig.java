@@ -32,8 +32,9 @@ public class ApiConfig {
         this.geoUrl     = props.getProperty("weather.api.geo-url", "");
         this.weatherUrl = props.getProperty("weather.api.weather-url", "");
 
-        if (apiKey.isBlank() || "YOUR_API_KEY_HERE".equals(apiKey)) {
-            throw new RuntimeException(
+        if (apiKey.isBlank() || "YOUR_API_KEY_HERE".equals(apiKey))//只要配置了key就不会报这个错误，因为原始的就是这一串占位字符，只有把这个改成自己的key才行
+            {
+            throw  new RuntimeException(
                     "API Key 未配置！请修改 src/main/resources/application.properties 中的 weather.api.key");
         }
     }
