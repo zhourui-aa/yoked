@@ -174,6 +174,7 @@ public class WechatWeatherBot {
                     String result = imageAnalyzer.analyze(imageBytes, "请详细描述这张图片的内容");
                     System.out.println("[图片] AI 分析结果: " + result);
                     trySendText(client, fromUser, result);
+                    aiClient.addToHistory(fromUser, "[用户发了一张图片，图片内容是：" + result + "]", result);
                 } catch (Exception e) {
                     System.err.println("[图片] 处理失败: " + e.getMessage());
                     trySendText(client, fromUser, "抱歉，图片识别失败: " + e.getMessage());

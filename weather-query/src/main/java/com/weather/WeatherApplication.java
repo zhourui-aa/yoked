@@ -57,7 +57,7 @@ public class WeatherApplication {
                 // 查询天气
                 try {
                     WeatherResponse resp = service.queryByCity(input);
-                    printWeather(resp);
+                    printWeather(resp);//调用输出
                 } catch (WeatherException e) {
                     // 业务异常：城市名空、找不到城市、API失败等
                     System.err.print("⚠ " + e.getMessage() +"，请重新输入!");//因为报错的红色渲染始终让err在下一轮循环开始后才打印到控制台，导致输出错位；这个可以让当前执行代码的线程进入阻塞，暂停指定时长。

@@ -176,4 +176,16 @@ public class AIClient {
         String systemPrompt = "你是一个友好的助手，用简洁的口语回复用户。回复控制在50字以内。";
         return callAIWithHistory(userId,systemPrompt, userMessage);
     }
+
+    public void addToHistory(String userId, String userMessage, String assistantReply) {
+        List<Map<String, String>> history = historyMap.getOrDefault(userId, new ArrayList<>());
+        history.add(Map.of("role", "user", "content", userMessage));
+        history.add(Map.of("role", "assistant", "content", assistantReply));
+
+        int maxMessages = MAX_HISTORY_ROUNDS * 2;
+        if (history.size() > maxMessages) {
+            history = new ArrayList<>(history.subList(history.size() - maxMessages, history.size()));
+        }
+        historyMap.put(userId, history);
+    }
 }
