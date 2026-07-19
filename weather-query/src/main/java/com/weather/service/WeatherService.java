@@ -60,10 +60,10 @@ public class WeatherService {
         log.info("开始查询城市天气: [{}]", trimmed);
 
         // ====== 第二步：城市搜索 → 拿到 locationId ======
-        String locationId = fetchLocationId(trimmed);
+        String locationId = fetchLocationId(trimmed);//根据城市名调用地理搜索 API，拿到城市唯一 locationId
 
         // ====== 第三步：用 locationId 查询天气 ======
-        String weatherJson = fetchWeatherJson(locationId);
+        String weatherJson = fetchWeatherJson(locationId);//用城市 ID 调用实时天气接口，获取压缩 JSON 字符串
 
         // ====== 第四步：解析 JSON 为 Java 对象 ======
         WeatherResponse response;

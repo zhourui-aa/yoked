@@ -11,9 +11,7 @@ import com.github.wechat.ilink.sdk.core.model.MessageItem;
 import com.github.wechat.ilink.sdk.core.model.WeixinMessage;
 import com.weather.exception.WeatherException;
 import com.weather.model.WeatherResponse;
-import com.weather.service.ImageAnalyzer;
-import com.weather.service.ImageGenerator;
-import com.weather.service.WeatherService;
+import com.weather.service.*;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
@@ -22,12 +20,14 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class WechatWeatherBot {
+    private static final LocationService locationService = new LocationService();
     private static final org.slf4j.Logger log =
             LoggerFactory.getLogger(WechatWeatherBot.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
     static AIClient aiClient = new AIClient();
     private static final ImageAnalyzer imageAnalyzer = new ImageAnalyzer();
     private static final ImageGenerator imageGenerator = new ImageGenerator();
+    private static final VoiceService voiceService = new VoiceService();
     /** 已处理的消息 ID，用于 onMessage 和 getUpdates 双路去重 */
     private static final Set<Long> processedMsgIds = ConcurrentHashMap.newKeySet();
 
@@ -167,6 +167,36 @@ public class WechatWeatherBot {
 
         for (MessageItem item : msg.getItem_list()) {
             // ===== 图片消息处理（独立判断，不依赖 text_item） =====
+            if (item.getVoice_item() != null) {
+                System.out.println("[语音] 收到来自 " + fromUser + " 的语音");
+                try {
+                    // 第1步：先试微信自带的语音转文字
+                    String voiceText = item.getVoice_item().getText();
+
+                    if (voiceText == null || voiceText.isBlank()) {
+                        // 第2步：getText() 为空，下载语音做 ASR
+                        System.out.println("[语音] getText()为空，下载语音做ASR...");
+                        byte[] voiceBytes = client.downloadVoiceFromMessageItem(item);
+
+                        // ★ 注意：这里下载的是 SILK 格式
+                        // 需要转成 WAV 才能给百炼 ASR
+                        // 见下方"难点说明"
+                        voiceText = voiceService.recognize(voiceBytes);
+                    }
+
+                    System.out.println("[语音] 识别文字: " + voiceText);
+
+                    // 第3步：把识别出的文字当普通文本消息处理
+                    // 复用现有的 callWithTools 流程
+                    processText(client, weatherService, aiClient, fromUser, voiceText, true);
+
+                } catch (Exception e) {
+                    System.err.println("[语音] 处理失败: " + e.getMessage());
+                    e.printStackTrace();
+                    trySendText(client, fromUser, "语音处理失败: " + e.getMessage());
+                }
+                continue;  // 语音消息处理完了，跳过后面的文本逻辑
+            }
             if (item.getImage_item() != null) {
                 System.out.println("[图片] 收到来自 " + fromUser + " 的图片");
                 try {
@@ -188,32 +218,7 @@ public class WechatWeatherBot {
 
             String text = item.getText_item().getText().trim();
             // ====== 新增：图片生成关键词前置判断 ======
-            if (text.contains("生成图") || text.contains("画一张") || text.contains("画个")
-                    || text.contains("生成一张") || text.contains("天气图")) {
-
-                // 提取图片描述
-                String imageDesc = text.replaceAll(".*?(生成图|画一张|画个|生成一张|天气图|画一个|做一张|来一张|生成图片)\\s*", "").trim();
-                if (imageDesc.isEmpty()) {
-                    imageDesc = "天气预报主题插画，晴朗天气";
-                }
-
-                System.out.println("[图片生成] 描述: " + imageDesc);
-                try {
-                    // 先告诉用户正在生成
-                    trySendText(client, fromUser, "正在为你生成图片，请稍等...");
-
-                    byte[] imageBytes = imageGenerator.generate(imageDesc);
-                    client.sendImage(fromUser, imageBytes, "generated.png", "image/png");
-                    trySendText(client, fromUser, "图片已生成~");
-
-                } catch (Exception e) {
-                    System.err.println("[图片生成] 失败: " + e.getMessage());
-                    trySendText(client, fromUser, "抱歉，图片生成失败: " + e.getMessage());
-                }
-                return;  // ← 已经处理完，直接返回，不走后面的天气逻辑
-            }
-
-            System.out.println(">>> 文本: [" + text + "]");
+            /*System.out.println(">>> 文本: [" + text + "]");
 
             String reply;
             try {
@@ -261,6 +266,131 @@ public class WechatWeatherBot {
             } catch (Exception e) {
                 System.err.println("!!! sendText 失败: " + e.getMessage());
             }
+             */
+            processText(client, weatherService, aiClient, fromUser, text, false);
+        }
+    }
+    /**
+     * 处理文本消息（从 handleMessage 和语音处理共用）
+     */
+    private static void processText(ILinkClient client,
+                                    WeatherService weatherService,
+                                    AIClient aiClient,
+                                    String fromUser, String text,
+                                    boolean fromVoice) {
+        System.out.println(">>> 文本: [" + text + "]");
+        String messageForAI = fromVoice ? "[语音消息] " + text : text;
+
+        String reply;
+        try {
+            // 统一入口：带工具清单调用 AI
+            AIClient.AICallResult result = aiClient.callWithTools(fromUser, messageForAI);
+
+            if (result.hasToolCall) {
+                // AI 要求调用工具
+                System.out.println(">>> 工具调用: " + result.toolName
+                        + " 参数: " + result.toolArguments);
+
+                String toolResult;
+                if ("query_weather".equals(result.toolName)) {
+                    // 从参数 JSON 里提取 city
+                    JsonNode args = objectMapper.readTree(result.toolArguments);
+                    String city = args.path("city").asText().trim();
+                    if(city.isEmpty()){
+                        System.out.println("用户未指定城市，自动定位中...");
+                        try {
+                            city = locationService.getCurrentCity();
+                            System.out.println(">>> 自动定位城市: " + city);
+                        } catch (Exception e) {
+                            System.err.println(">>> 自动定位失败: " + e.getMessage());
+                            city = "北京";  // 定位失败用默认城市
+                        }
+                    }
+                    System.out.println(">>> 查询天气: " + city);
+
+                    WeatherResponse weather = weatherService.queryByCity(city);
+                    toolResult = String.format(
+                            "城市:%s 温度:%s°C 体感:%s°C 天气:%s 风向:%s %s级 湿度:%s%% 气压:%shPa",
+                            weather.getCityName(), weather.getNow().getTemp(),
+                            weather.getNow().getFeelsLike(), weather.getNow().getText(),
+                            weather.getNow().getWindDir(), weather.getNow().getWindScale(),
+                            weather.getNow().getHumidity(), weather.getNow().getPressure()
+                    );
+                }else if ("generate_image".equals(result.toolName)) {
+                    // 提取图片描述
+                    JsonNode args = objectMapper.readTree(result.toolArguments);
+                    String imageDesc = args.path("description").asText().trim();
+                    if (imageDesc.isEmpty()) {
+                        imageDesc = "美丽的风景画";
+                    }
+                    System.out.println("[图片生成] 描述: " + imageDesc);
+                    try {
+                        trySendText(client, fromUser, "正在为你生成图片，请稍等...");
+                        byte[] imageBytes = imageGenerator.generate(imageDesc);
+                        client.sendImage(fromUser, imageBytes, "generated.png", null);
+                        System.out.println("[图片生成] 已发送");
+                    } catch (Exception e) {
+                        System.err.println("[图片生成] 失败: " + e.getMessage());
+                        trySendText(client, fromUser, "图片生成失败: " + e.getMessage());
+                    }
+                    aiClient.addToHistory(fromUser, messageForAI, "已为用户生成了一张图片：" + imageDesc);
+                    return;  // 图片生成完直接返回，不走后面的文字回复
+                } else {
+                    toolResult = "未知工具: " + result.toolName;
+                }
+
+                // 把工具结果发回 AI，让它生成自然语言回复
+                reply = aiClient.callWithToolResult(
+                        fromUser, messageForAI,
+                        result.toolName, result.toolArguments,
+                        result.toolCallId, toolResult
+                );
+
+            } else {
+                // 普通闲聊，直接回复
+                reply = result.text;
+            }
+
+        } catch (WeatherException e) {
+            reply = "抱歉，" + e.getMessage();
+        } catch (Exception e) {
+            System.err.println("!!! 处理异常: " + e.getClass().getSimpleName()
+                    + " - " + e.getMessage());
+            e.printStackTrace();
+            reply = "抱歉，出了点问题，请稍后再试。";
+        }
+
+            // ===== 检查是否需要语音回复 =====
+        boolean useVoice = false;
+        if (reply.startsWith("[voice]")) {
+            useVoice = true;
+            reply = reply.substring("[voice]".length()).trim();
+        } else if (reply.startsWith("[text]")) {
+            useVoice = false;
+            reply = reply.substring("[text]".length()).trim();
+        } else {
+            // AI 没加标记 → 用 fromVoice 兜底
+            // 语音消息默认语音回复，但如果回复含大量数字则降级文字
+            useVoice = fromVoice && !reply.matches(".*\\d{2,}.*");
+            System.out.println(">>> [兜底] AI未加标记，用fromVoice判断: " + useVoice);
+        }
+
+        System.out.println(">>> 回复: " + reply + " (语音=" + useVoice + ")");
+
+        if (useVoice) {
+            try {
+                // 直接发送 WAV 语音文件
+                System.out.println("[语音] 开始TTS合成WAV: " + reply);
+                byte[] wavBytes = voiceService.synthesizeToWav(reply);
+                System.out.println("[语音] TTS合成成功, WAV大小: " + wavBytes.length + " bytes");
+                client.sendFile(fromUser, wavBytes, "reply.wav", null);
+                System.out.println("[语音] 已发送 WAV 语音文件");
+            } catch (Exception e) {
+                trySendText(client, fromUser, "[语音失败] " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                e.printStackTrace();
+            }
+        } else {
+            trySendText(client, fromUser, reply);
         }
     }
 }
