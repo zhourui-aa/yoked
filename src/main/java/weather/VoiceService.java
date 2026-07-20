@@ -40,11 +40,11 @@ public class VoiceService {
     public boolean isVoiceReplyEnabled() {
         return voiceReplyEnabled;
     }
-
+//微信替你完成了"声波 → 特征 → 音素 → 文字"的完整 ASR 流程，你的机器人只处理文字
     public void handleVoiceMessage(String fromUserId, String voiceText) {
         if (voiceText != null && !voiceText.isEmpty()) {
             System.out.println("  🎤 语音转文字: [" + voiceText + "]");
-            bot.handleTextMessage(fromUserId, voiceText);
+            bot.handleTextMessage(fromUserId, voiceText);//当作普通文字处理
         } else {
             try {
                 bot.getClient().sendText(fromUserId, "🎤 收到语音，但未能识别内容~");
@@ -76,14 +76,14 @@ public class VoiceService {
         bot.getClient().sendFile(fromUserId, mp3Bytes, "reply.mp3", "🎙️ AI 语音回复");
         System.out.println("✅ 语音文件发送成功");
     }
-
+//调用阿里云 TTS（文字 → 声学特征 → 音频）
     private byte[] callCosyVoice(String text) throws IOException {
         JsonObject requestBody = new JsonObject();
-        requestBody.addProperty("model", "qwen3-tts-flash");
+        requestBody.addProperty("model", "qwen3-tts-flash"); // ← 大模型 TTS
 
         JsonObject input = new JsonObject();
         input.addProperty("text", text);
-        input.addProperty("voice", "Cherry");
+        input.addProperty("voice", "Cherry");// ← 音色
         input.addProperty("language_type", "Chinese");
         requestBody.add("input", input);
 
@@ -108,6 +108,7 @@ public class VoiceService {
             if (output == null) {
                 throw new IOException("TTS 响应缺少 output 字段: " + bodyStr);
             }
+            // 解析 JSON 提取音频 URL
             JsonObject audio = output.getAsJsonObject("audio");
             if (audio == null) {
                 if (output.has("url")) {
@@ -121,13 +122,13 @@ public class VoiceService {
         }
 
         System.out.println("  🔊 TTS 音频 URL: " + audioUrl.substring(0, Math.min(60, audioUrl.length())) + "...");
-
+        // 下载音频文件
         Request downloadReq = new Request.Builder().url(audioUrl).get().build();
         try (Response downloadResp = httpClient.newCall(downloadReq).execute()) {
             if (!downloadResp.isSuccessful()) {
                 throw new IOException("下载音频失败 HTTP " + downloadResp.code());
             }
-            byte[] audioBytes = downloadResp.body().bytes();
+            byte[] audioBytes = downloadResp.body().bytes();  // MP3 二进制
             System.out.println("  ⬇️ 下载音频: " + audioBytes.length + " 字节");
             return audioBytes;
         }
