@@ -6,11 +6,14 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.*;
 
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 public class VoiceService {
@@ -23,6 +26,24 @@ public class VoiceService {
     private static final int SAMPLE_RATE = 16000;
 
     private boolean voiceReplyEnabled = false;
+    private String currentVoice = "Cherry";  // ← 默认音色
+
+    // 可用音色表（示例，可按阿里云文档增减）
+    private static final Map<String, String> AVAILABLE_VOICES = new HashMap<>();
+    static {
+        AVAILABLE_VOICES.put("cherry", "Cherry");
+        AVAILABLE_VOICES.put("qianxue", "Chelsie");
+        AVAILABLE_VOICES.put("buchiyu", "Nofish");
+        AVAILABLE_VOICES.put("tiancha", "Ryan");
+    }
+    // 音色展示名（仅用于列表展示）
+    private static final Map<String, String> VOICE_DISPLAY_NAMES = new HashMap<>();
+    static {
+        VOICE_DISPLAY_NAMES.put("cherry", "Cherry（女声，默认）");
+        VOICE_DISPLAY_NAMES.put("qianxue", "千雪（乖巧，柔弱）");
+        VOICE_DISPLAY_NAMES.put("buchiyu", "不吃鱼（南方口音男）");
+        VOICE_DISPLAY_NAMES.put("tiancha", "甜茶（美剧张力男）");
+    }
 
     public VoiceService(ILinkWeatherBot bot) {
         this.bot = bot;
@@ -30,6 +51,39 @@ public class VoiceService {
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build();
+    }
+    // ========== 音色控制 ==========
+
+    public Map<String, String> getAvailableVoices() {
+        return AVAILABLE_VOICES;
+    }
+
+    public String getCurrentVoice() {
+        return currentVoice;
+    }
+
+    public void setCurrentVoice(String voiceKey) {
+        String key = voiceKey.toLowerCase();
+        if (!AVAILABLE_VOICES.containsKey(key)) {
+            throw new IllegalArgumentException("未知音色: " + voiceKey);
+        }
+        this.currentVoice = AVAILABLE_VOICES.get(key);  // 直接取英文 ID
+        System.out.println("🎙️ 已切换音色: " + this.currentVoice);
+    }
+
+    public String getVoiceListText() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("🎙️ 可用音色列表\n");
+        sb.append("━━━━━━━━━━━━━━━\n");
+        for (Map.Entry<String, String> entry : AVAILABLE_VOICES.entrySet()) {
+            String display = VOICE_DISPLAY_NAMES.getOrDefault(entry.getKey(), entry.getValue());
+            sb.append("• ").append(entry.getKey())
+                    .append(" → ").append(display).append("\n");
+        }
+        sb.append("━━━━━━━━━━━━━━━\n");
+        sb.append("💡 发送「音色 名称」切换\n");
+        sb.append("💡 例：音色 cherry");
+        return sb.toString();
     }
 
     public void setVoiceReplyEnabled(boolean enabled) {
@@ -83,7 +137,7 @@ public class VoiceService {
 
         JsonObject input = new JsonObject();
         input.addProperty("text", text);
-        input.addProperty("voice", "Cherry");// ← 音色
+        input.addProperty("voice", currentVoice);// ← 音色
         input.addProperty("language_type", "Chinese");
         requestBody.add("input", input);
 

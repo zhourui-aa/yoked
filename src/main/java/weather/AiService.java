@@ -10,6 +10,7 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 public class AiService {
@@ -23,7 +24,7 @@ public class AiService {
     private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
 
     private final OkHttpClient httpClient;
-    private final OkHttpClient imageGenClient; // 图片生成用更长超时
+    private final OkHttpClient imageGenClient;
     private final String modelName;
 
     public AiService() {
@@ -36,7 +37,6 @@ public class AiService {
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build();
-        // 图片生成可能需要 60-120 秒
         this.imageGenClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
@@ -48,7 +48,6 @@ public class AiService {
         return modelName;
     }
 
-    // ========== 辅助：获取实际聊天模型（画图模型不支持纯文本）==========
     private String getChatModel() {
         return modelName.contains("wan2.7-image") ? "qwen-plus" : modelName;
     }
@@ -58,7 +57,7 @@ public class AiService {
         return "qwen-vl-plus";
     }
 
-    // ==================== 聊天对话 ====================
+    // ==================== 普通聊天 ====================
     public String chat(String userMessage) throws AiException {
         return chatWithSystem(null, userMessage);
     }
@@ -96,7 +95,128 @@ public class AiService {
         }
     }
 
-    // ==================== 图片分析（多模态）====================
+    // ==================== 带工具调用的对话（核心新增）====================
+    /**
+     * 支持 Function Calling 的对话。
+     * AI 会自动判断是否需要调用工具，执行后再生成自然语言回复。
+     */
+    public String chatWithTools(String userMessage, List<Tool> tools) throws AiException {
+        if (tools == null || tools.isEmpty()) {
+            return chat(userMessage);
+        }
+
+        // 构建 tools 数组（OpenAI 兼容格式）
+        JsonArray toolsArray = new JsonArray();
+        for (Tool tool : tools) {
+            JsonObject toolObj = new JsonObject();
+            toolObj.addProperty("type", "function");
+
+            JsonObject function = new JsonObject();
+            function.addProperty("name", tool.name());
+            function.addProperty("description", tool.description());
+            function.add("parameters", tool.parametersSchema());
+
+            toolObj.add("function", function);
+            toolsArray.add(toolObj);
+        }
+
+        // 第一次请求：让模型判断是否需要调用工具
+        JsonObject requestBody = new JsonObject();
+        requestBody.addProperty("model", getChatModel());
+
+        JsonArray messages = new JsonArray();
+
+        JsonObject systemMsg = new JsonObject();
+        systemMsg.addProperty("role", "system");
+        systemMsg.addProperty("content", "你是一个智能天气助手。当用户询问天气、穿衣建议、出行建议、是否需要带伞时，请使用 weather_query 工具获取实时天气数据，不要编造。");
+        messages.add(systemMsg);
+
+        JsonObject userMsg = new JsonObject();
+        userMsg.addProperty("role", "user");
+        userMsg.addProperty("content", userMessage);
+        messages.add(userMsg);
+
+        requestBody.add("messages", messages);
+        requestBody.add("tools", toolsArray);
+        requestBody.addProperty("tool_choice", "auto");
+
+        String responseBody = executeChatRaw(requestBody);
+        JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
+        JsonArray choices = json.getAsJsonArray("choices");
+
+        if (choices == null || choices.size() == 0) {
+            throw new AiException("模型返回空结果");
+        }
+
+        JsonObject message = choices.get(0).getAsJsonObject().getAsJsonObject("message");
+
+        // 没有 tool_calls，直接返回普通回复
+        if (!message.has("tool_calls") || message.get("tool_calls").isJsonNull()) {
+            return message.has("content") && !message.get("content").isJsonNull()
+                    ? message.get("content").getAsString()
+                    : "模型无回复";
+        }
+
+        // 有 tool_calls，执行工具后再调一次模型
+        JsonArray toolCalls = message.getAsJsonArray("tool_calls");
+
+        // 构建第二轮 messages
+        JsonArray newMessages = new JsonArray();
+        newMessages.add(systemMsg);
+        newMessages.add(userMsg);
+
+        // 添加 assistant 的 tool_calls 消息
+        JsonObject assistantMsg = new JsonObject();
+        assistantMsg.addProperty("role", "assistant");
+        assistantMsg.add("tool_calls", toolCalls);
+        newMessages.add(assistantMsg);
+
+        // 执行每个工具调用，添加结果
+        for (int i = 0; i < toolCalls.size(); i++) {
+            JsonObject toolCall = toolCalls.get(i).getAsJsonObject();
+            String id = toolCall.get("id").getAsString();
+            JsonObject function = toolCall.getAsJsonObject("function");
+            String name = function.get("name").getAsString();
+            String arguments = function.get("arguments").getAsString();
+
+            Tool tool = findTool(tools, name);
+            JsonObject args = JsonParser.parseString(arguments).getAsJsonObject();
+            ToolResult result = tool.execute(args);
+
+            JsonObject toolMsg = new JsonObject();
+            toolMsg.addProperty("role", "tool");
+            toolMsg.addProperty("tool_call_id", id);
+            toolMsg.addProperty("content", result.content);
+            newMessages.add(toolMsg);
+        }
+
+        // 第二次请求：让模型根据工具结果生成最终回复
+        JsonObject finalRequest = new JsonObject();
+        finalRequest.addProperty("model", getChatModel());
+        finalRequest.add("messages", newMessages);
+
+        String finalResponse = executeChatRaw(finalRequest);
+        JsonObject finalJson = JsonParser.parseString(finalResponse).getAsJsonObject();
+        JsonArray finalChoices = finalJson.getAsJsonArray("choices");
+
+        if (finalChoices == null || finalChoices.size() == 0) {
+            throw new AiException("模型最终返回空结果");
+        }
+
+        JsonObject finalMessage = finalChoices.get(0).getAsJsonObject().getAsJsonObject("message");
+        return finalMessage.has("content") && !finalMessage.get("content").isJsonNull()
+                ? finalMessage.get("content").getAsString()
+                : "模型无回复";
+    }
+
+    private Tool findTool(List<Tool> tools, String name) throws AiException {
+        for (Tool tool : tools) {
+            if (tool.name().equals(name)) return tool;
+        }
+        throw new AiException("未知工具: " + name);
+    }
+
+    // ==================== 图片分析 ====================
     public String analyzeImage(String imageUrl, String question) throws AiException {
         if (imageUrl == null || imageUrl.isEmpty()) {
             throw new AiException("图片 URL 为空");
@@ -140,25 +260,16 @@ public class AiService {
         }
     }
 
-    // ==================== 图片生成（万相 wan2.7-image）====================
-    /**
-     * 文生图
-     * @param prompt 图片描述
-     * @param size 尺寸: 1024x1024 / 1280x720 / 720x1280 / 2048x2048(2K) / 4096x4096(4K,仅pro)
-     * @param genModel 生成模型: wan2.7-image / wan2.7-image-pro
-     * @return 生成的图片URL
-     */
+    // ==================== 图片生成 ====================
     public String generateImage(String prompt, String size, String genModel) throws AiException {
         if (prompt == null || prompt.isEmpty()) {
             throw new AiException("图片描述不能为空");
         }
 
         try {
-            // DashScope 原生格式请求
             JsonObject requestBody = new JsonObject();
             requestBody.addProperty("model", genModel);
 
-            // input.messages
             JsonObject input = new JsonObject();
             JsonArray messages = new JsonArray();
 
@@ -175,11 +286,9 @@ public class AiService {
             input.add("messages", messages);
             requestBody.add("input", input);
 
-            // parameters
             JsonObject parameters = new JsonObject();
             parameters.addProperty("size", size);
             parameters.addProperty("n", 1);
-            // wan2.7-image-pro 支持 thinking_mode 提升质量
             if (genModel.contains("pro")) {
                 parameters.addProperty("thinking_mode", true);
             }
@@ -197,10 +306,6 @@ public class AiService {
     }
 
     // ==================== HTTP 执行方法 ====================
-
-    /**
-     * 执行聊天/视觉请求 (OpenAI 兼容端点)
-     */
     private String executeChatRequest(JsonObject requestBody) throws AiException {
         try {
             Request request = new Request.Builder()
@@ -240,8 +345,29 @@ public class AiService {
     }
 
     /**
-     * 执行图片生成请求 (DashScope 原生端点)
+     * 执行聊天请求，返回原始响应 JSON 字符串（用于 Function Calling）
      */
+    private String executeChatRaw(JsonObject requestBody) throws AiException {
+        try {
+            Request request = new Request.Builder()
+                    .url(CHAT_URL)
+                    .header("Authorization", "Bearer " + API_KEY)
+                    .header("Content-Type", "application/json")
+                    .post(RequestBody.create(JSON, requestBody.toString()))
+                    .build();
+
+            try (Response response = httpClient.newCall(request).execute()) {
+                String responseBody = response.body().string();
+                if (!response.isSuccessful()) {
+                    throw new AiException("HTTP错误: " + response.code() + ", body=" + responseBody);
+                }
+                return responseBody;
+            }
+        } catch (IOException e) {
+            throw new AiException("网络错误: " + e.getMessage());
+        }
+    }
+
     private String executeImageGenRequest(JsonObject requestBody) throws AiException {
         try {
             Request request = new Request.Builder()
@@ -260,7 +386,6 @@ public class AiService {
 
                 JsonObject json = JsonParser.parseString(responseBody).getAsJsonObject();
 
-                // 解析万相响应格式: output.choices[0].message.content[0].image
                 JsonObject output = json.getAsJsonObject("output");
                 if (output == null) {
                     throw new AiException("响应缺少 output 字段: " + responseBody);
@@ -303,6 +428,20 @@ public class AiService {
                 "你是一个专业的天气助手，擅长用通俗易懂的语言解释天气数据，并给出实用的生活建议。",
                 prompt
         );
+    }
+
+    public String summarizeDocument(String content, String fileName) throws AiException {
+        String system = "你是一位专业的文档分析助手，擅长快速提炼文档核心内容，输出简洁、结构化的总结。";
+        String prompt = "请对以下文档内容进行总结：\n\n" +
+                "【文档名称】" + fileName + "\n\n" +
+                "【要求】\n" +
+                "1. 用 3-5 个要点提炼核心内容\n" +
+                "2. 如有数据、结论、行动项请突出显示\n" +
+                "3. 控制在 300 字以内\n" +
+                "4. 使用中文回复\n\n" +
+                "【文档内容】\n" + content;
+
+        return chatWithSystem(system, prompt);
     }
 
     public String chatWithImage(String text, String base64Image) throws AiException {

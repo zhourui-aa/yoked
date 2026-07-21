@@ -1,12 +1,16 @@
 package weather;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class CommandHandler {
     private final WeatherService weatherService;
     private AiService aiService;
     private final VoiceService voiceService;
+    private final List<Tool> tools; // 新增：注册给 AI 的工具列表
 
     private static final Map<String, String> AVAILABLE_MODELS = new HashMap<>();
     static {
@@ -27,11 +31,10 @@ public class CommandHandler {
         this.weatherService = ws;
         this.aiService = ai;
         this.voiceService = vs;
+        // 注册工具：AI 在对话中可自动调用
+        this.tools = List.of(new WeatherTool(ws));
     }
 
-    /**
-     * 处理所有文本命令，返回回复内容；非命令返回 null
-     */
     public String handle(String text) {
         String reply = handleModelCommand(text);
         if (reply != null) return reply;
@@ -88,6 +91,24 @@ public class CommandHandler {
             return "🔇 语音回复已关闭";
         }
 
+        if (lower.equals("音色列表") || lower.equals("voices")) {
+            return voiceService.getVoiceListText();
+        }
+
+        if (lower.equals("当前音色") || lower.equals("voice")) {
+            return "🎙️ 当前音色: " + voiceService.getCurrentVoice() + "\n发送「音色列表」查看所有音色";
+        }
+
+        if (lower.startsWith("音色 ") || lower.startsWith("voice ")) {
+            String voiceName = lower.startsWith("音色 ") ? text.substring(3).trim() : text.substring(6).trim();
+            try {
+                voiceService.setCurrentVoice(voiceName);
+                return "✅ 已切换音色: " + voiceService.getCurrentVoice();
+            } catch (IllegalArgumentException e) {
+                return "❌ " + e.getMessage() + "\n发送「音色列表」查看可用音色";
+            }
+        }
+
         return null;
     }
 
@@ -99,35 +120,37 @@ public class CommandHandler {
         if (lower.equals("help") || lower.equals("帮助")) {
             return "🤖 AI 天气机器人\n" +
                     "━━━━━━━━━━━━━━━\n" +
-                    "🌤️ 天气 北京 → 查询天气\n" +
+                    "🌤️ 天气 北京 → 快速查询天气\n" +
                     "🖼️ 发送图片 → AI识别图片\n" +
                     "🎨 画 xxx → AI生成图片\n" +
-                    "💬 任意文字 → AI对话\n" +
+                    "💬 任意文字 → AI智能对话（自动识别天气意图）\n" +
                     "📋 模型列表 → 查看可用模型\n" +
                     "🔧 模型 xxx → 切换模型\n" +
                     "📌 当前模型 → 查看当前模型\n" +
+                    "🔊 语音开启/语音关闭 → 开关语音回复\n" +
+                    "🎙️ 音色列表 → 查看可用音色\n" +
+                    "🎙️ 音色 xxx → 切换TTS音色\n" +
+                    "📎 发送文档 → AI自动总结\n" +
                     "━━━━━━━━━━━━━━━\n" +
-                    "💡 图片识别需切换至 qwen-vl-plus\n" +
-                    "💡 画图使用: 画 一只橘猫在月球上\n" +
-                    "💡 画图模型: wan2.7-image / wan2.7-image-pro";
+                    "💡 现在可以直接问：「明天去北京出差要带伞吗？」\n" +
+                    "💡 AI 会自动调用天气工具并给出建议";
         }
 
+        // 快速路径：明确的天气命令，直接查询（省 token、响应快）
         if (lower.startsWith("天气 ")) {
             return queryWeather(text.substring(3).trim(), false);
         }
         if (lower.startsWith("weather ")) {
             return queryWeather(text.substring(8).trim(), false);
         }
-        if (lower.contains("天气") && (lower.contains("怎么样") || lower.contains("如何"))) {
-            String city = extractCityFromText(text);
-            if (city != null) return queryWeather(city, true);
-        }
 
+        // 智能路径：走 AI + Function Calling
+        // AI 会自动判断是否需要调用 weather_query 工具
         return chatWithAi(text);
     }
 
     private String queryWeather(String city, boolean useAi) {
-        System.out.println("🌤️ 查询天气: " + city + (useAi ? " (AI分析)" : ""));
+        System.out.println("🌤️ 快速查询天气: " + city);
         if (city == null || city.isEmpty()) {
             return "❌ 请提供城市名称";
         }
@@ -144,22 +167,16 @@ public class CommandHandler {
         }
     }
 
+    /**
+     * 走 AI 路径，支持 Function Calling 自动调用工具
+     */
     private String chatWithAi(String message) {
-        System.out.println("🧠 AI对话: " + message);
+        System.out.println("🧠 AI 对话: " + message);
         try {
-            return aiService.chat(message);
+            return aiService.chatWithTools(message, tools);
         } catch (Exception e) {
-            System.err.println("❌ AI对话失败: " + e.getMessage());
-            return "❌ AI服务暂时不可用: " + e.getMessage();
+            System.err.println("❌ AI 对话失败: " + e.getMessage());
+            return "❌ AI 服务暂时不可用: " + e.getMessage();
         }
-    }
-
-    private String extractCityFromText(String text) {
-        String[] cities = {"北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "武汉", "西安", "重庆",
-                "天津", "苏州", "长沙", "郑州", "沈阳", "青岛", "宁波", "东莞", "无锡", "佛山"};
-        for (String city : cities) {
-            if (text.contains(city)) return city;
-        }
-        return null;
     }
 }
