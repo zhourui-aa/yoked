@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class AIClient {
+    private static final int MAX_HISTORY_CONTENT_LENGTH = 2000;
 
     public static class AICallResult {
         public final boolean hasToolCall;   // true=要调工具, false=普通回复
@@ -68,148 +69,6 @@ public class AIClient {
         this.objectMapper = new ObjectMapper();
     }
 
-    /*public String analyzeIntent(String userMessage) {
-        // 系统提示词：告诉 AI 它的角色和输出格式
-        String systemPrompt = ""
-                + "你是天气助手。分析用户消息，返回JSON格式：\n"
-                + "{ \"isWeather\": true/false, \"city\": \"城市名\" }\n"
-                + "规则：\n"
-                + "1. 用户如果是在查天气，isWeather=true，city填城市名\n"
-                + "2. 如果不是查天气，isWeather=false，city填空字符串\n"
-                + "3. 只返回JSON，不要解释";
-
-        return callAIBare(systemPrompt, userMessage);
-    }
-
-     */
-
-    /**
-     * 把天气数据交给 AI，让它生成友好的自然语言回复
-     */
-    /*
-    public String formatWeatherReply(String userId,String userQuestion, String weatherData) {
-        String systemPrompt = ""
-                + "你是天气助手。用户问了天气问题，下面是查到的天气数据。\n"
-                + "请用友好、口语化的语气回复，像朋友聊天一样。\n"
-                + "可以适当加一点穿衣建议或出行提示。";
-
-        String userPrompt = "用户问：" + userQuestion + "\n天气数据：" + weatherData;
-
-        return callAIWithHistory(userId,systemPrompt, userPrompt);
-    }
-     */
-
-    /**
-     * 发请求给 AI，返回 AI 说的第一句话
-     */
-    /*
-    private String callAIBare(String systemPrompt, String userMessage) {
-
-        try {
-            Map<String, Object> body = Map.of(
-                    "model", "qwen3.7-max",
-                    "messages", List.of(
-                            Map.of("role", "system", "content", systemPrompt),
-                            Map.of("role", "user", "content", userMessage)
-
-                    ),
-                    "temperature", 0.3
-            );
-
-            String json = objectMapper.writeValueAsString(body);
-            System.out.println(">>> AI 请求 URL: " + apiUrl);
-            System.out.println(">>> AI 请求体: " + json.substring(0, Math.min(json.length(), 200)) + "...");
-
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(json))
-                    .timeout(Duration.ofSeconds(30))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(
-                    request, HttpResponse.BodyHandlers.ofString());
-
-            System.out.println(">>> AI 响应状态: " + response.statusCode());
-            System.out.println(">>> AI 响应体: " + response.body().substring(0, Math.min(response.body().length(), 200)) + "...");
-
-            // ... 解析代码不变 ...
-            JsonNode root = objectMapper.readTree(response.body());
-            return root.path("choices").get(0)
-                    .path("message").path("content").asText();
-
-        } catch (Exception e) {
-            System.err.println("!!! AI 调用失败: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("AI API 调用失败", e);
-        }
-    }
-     */
-
-    /*private String callAIWithHistory(String userId, String systemPrompt, String userMessage) {
-        try {
-            // 1. 取出该用户的历史对话
-            List<Map<String, String>> history = historyMap.getOrDefault(userId, new ArrayList<>());
-
-            // 2. 拼完整 messages 数组：system + 历史 + 当前问题
-            List<Map<String, String>> allMessages = new ArrayList<>();
-            allMessages.add(Map.of("role", "system", "content", systemPrompt));
-            allMessages.addAll(history);
-            allMessages.add(Map.of("role", "user", "content", userMessage));
-
-            // 3. 发请求
-            Map<String, Object> body = Map.of(
-                    "model", "qwen3.7-max",
-                    "messages", allMessages,
-                    "temperature", 0.3
-            );
-
-            String json = objectMapper.writeValueAsString(body);
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + apiKey)
-                    .POST(HttpRequest.BodyPublishers.ofString(json))
-                    .timeout(Duration.ofSeconds(30))
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request,
-                    HttpResponse.BodyHandlers.ofString());
-
-            JsonNode root = objectMapper.readTree(response.body());
-            String reply = root.path("choices").get(0)
-                    .path("message").path("content").asText();
-
-            // 4. 把这一轮对话存进历史
-            history.add(Map.of("role", "user", "content", userMessage));
-            history.add(Map.of("role", "assistant", "content", reply));
-
-            // 5. 如果历史太长，只保留最近 MAX_HISTORY_ROUNDS 轮（每轮2条）
-            int maxMessages = MAX_HISTORY_ROUNDS * 2;
-            if (history.size() > maxMessages) {
-                history = new ArrayList<>(
-                        history.subList(history.size() - maxMessages, history.size())
-                );
-            }
-
-            historyMap.put(userId, history);
-            return reply;
-
-        } catch (Exception e) {
-            System.err.println("!!! AI 调用失败: " + e.getMessage());
-            e.printStackTrace();
-            throw new RuntimeException("AI API 调用失败", e);
-        }
-    }
-
-    public String chat(String userId,String userMessage) {
-        String systemPrompt = "你是一个友好的助手，用简洁的口语回复用户。回复控制在50字以内。";
-        return callAIWithHistory(userId,systemPrompt, userMessage);
-    }
-
-     */
-
     private String buildSystemPrompt() {
         String now = java.time.LocalDateTime.now()
                 .format(java.time.format.DateTimeFormatter
@@ -225,6 +84,7 @@ public class AIClient {
                 + "你的回复必须在最开头加上 [voice] 或 [text] 标记，然后换行写正文。\n"
                 + "判断规则：\n"
                 + "1. 用户消息以 [语音消息] 开头 → 默认用 [voice] 回复\n"
+                + "1.5. 用户消息以 [用户要求语音回答] 开头 → 必须用 [voice] 回复\n"
                 + "2. 但如果回复内容含3个以上数字（如天气数据）→ 用 [text]\n"
                 + "3. 用户明确说'用语音''读给我听''念出来' → 用 [voice]\n"
                 + "4. 用户明确说'打字''文字回复' → 用 [text]\n"
@@ -233,8 +93,13 @@ public class AIClient {
                 + "示例：\n"
                 + "[voice]\n你好呀！\n"
                 + "[text]\n北京今天晴，气温35度。\n"
+                + "===== 音色规则 =====\n"
+                + "用户说'切换音色'或'换成XX'时，系统会自动处理，你不需要回答'已切换'，只需正常回复即可。\n"
                 + "===== 规则结束 =====\n"
-                + "其他问题直接回复即可。";
+                + "其他问题直接回复即可。\n"
+                + "===== 语音音色 =====\n"
+                + "用户可以选择音色来语音回复，可用音色: 男生(默认)、女生、童声、粤语、东北话、陕西话等。\n"
+                + "如果用户说'用女生读'或'换童声'之类的，你只需正常回复，系统会自动匹配音色。\n";
     }
 
     private List<Map<String, Object>> buildTools() {
@@ -270,6 +135,32 @@ public class AIClient {
                                                 )
                                         ),
                                         "required", List.of("description")
+                                )
+                        )
+                ),
+                Map.of(
+                        "type", "function",
+                        "function", Map.of(
+                                "name", "generate_document",
+                                "description", "根据用户的要求生成文档文件。当用户要求生成报告、总结文档、制作表格、导出文件时调用此工具",
+                                "parameters", Map.of(
+                                        "type", "object",
+                                        "properties", Map.of(
+                                                "content", Map.of(
+                                                        "type", "string",
+                                                        "description", "文档的完整内容"
+                                                ),
+                                                "format", Map.of(
+                                                        "type", "string",
+                                                        "description", "文档格式: txt/md/csv/pdf/docx/xlsx",
+                                                        "enum", List.of("txt", "md", "csv", "pdf", "docx", "xlsx")
+                                                ),
+                                                "file_name", Map.of(
+                                                        "type", "string",
+                                                        "description", "文件名（不含扩展名），如'天气报告'"
+                                                )
+                                        ),
+                                        "required", List.of("content", "format")
                                 )
                         )
                 )
@@ -336,7 +227,7 @@ public class AIClient {
             System.out.println(">>> [callWithTools] AI 普通回复: " + reply);
 
             // 存历史
-            history.add(Map.of("role", "user", "content", userMessage));
+            history.add(Map.of("role", "user", "content", truncateContent(userMessage)));
             history.add(Map.of("role", "assistant", "content", reply));
             trimHistory(history);
             historyMap.put(userId, history);
@@ -416,7 +307,7 @@ public class AIClient {
             System.out.println(">>> [callWithToolResult] AI 最终回复: " + reply);
 
             // 存历史（只存用户问题和最终回复，不存中间的工具调用）
-            history.add(Map.of("role", "user", "content", userMessage));
+            history.add(Map.of("role", "user", "content", truncateContent(userMessage)));
             history.add(Map.of("role", "assistant", "content", reply));
             trimHistory(history);
             historyMap.put(userId, history);
@@ -451,4 +342,12 @@ public class AIClient {
         }
         historyMap.put(userId, history);
     }
+
+    private static String truncateContent(String content) {
+        if (content == null) return "";
+        if (content.length() <= MAX_HISTORY_CONTENT_LENGTH) return content;
+        return content.substring(0, MAX_HISTORY_CONTENT_LENGTH)
+                + "\n...[内容过长已截断，剩余 " + (content.length() - MAX_HISTORY_CONTENT_LENGTH) + " 字]";
+    }
+
 }

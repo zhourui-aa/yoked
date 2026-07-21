@@ -18,6 +18,33 @@ import java.util.Map;
 import java.util.Properties;
 
 public class VoiceService {
+    // ===== 音色管理 =====
+    /** 默认音色 */
+    public static final String DEFAULT_VOICE = "longanyang";
+
+    /** 支持的音色列表，key=voice参数, value=中文描述 */
+    public static final Map<String, String> SUPPORTED_VOICES = Map.ofEntries(
+            Map.entry("longanyang", "阳光大男孩(默认)"),
+            Map.entry("longanhuan_v3", "欢脱元气女"),
+            Map.entry("longanhuan", "欢脱元气女(旧版)"),
+            Map.entry("longhuhu_v3", "天真烂漫女童"),
+            Map.entry("longpaopao_v3", "飞天泡泡音"),
+            Map.entry("longjielidou_v3", "阳光顽皮男"),
+            Map.entry("longxian_v3", "豪放可爱女"),
+            Map.entry("longling_v3", "稚气呆板女"),
+            Map.entry("longshanshan_v3", "戏剧化童声"),
+            Map.entry("longniuniu_v3", "阳光男童声"),
+            Map.entry("longjiaxin_v3", "优雅粤语女"),
+            Map.entry("longjiayi_v3", "知性粤语女"),
+            Map.entry("longanyue_v3", "欢脱粤语男"),
+            Map.entry("longlaotie_v3", "东北直率男"),
+            Map.entry("longshange_v3", "原味陕北男")
+    );
+
+    public static boolean isValidVoice(String voice) {
+        return voice != null && SUPPORTED_VOICES.containsKey(voice);
+    }
+
     private final String apiKey;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -186,13 +213,22 @@ public class VoiceService {
      * @return WAV 格式的音频数据
      */
     public byte[] synthesizeToWav(String text) {
+            return synthesizeToWav(text, DEFAULT_VOICE);
+        }
+
+        /**
+         * 指定音色的 TTS 合成
+         * @param text 要合成的文字
+         * @param voice 音色参数，如 "longanyang"、"longhuhu_v3"
+         */
+        public byte[] synthesizeToWav(String text, String voice) {
         try {
             // 1. 拼请求体
             Map<String, Object> body = new java.util.LinkedHashMap<>();
             body.put("model", "cosyvoice-v3-flash");
             body.put("input", Map.of(
                     "text", text,
-                    "voice", "longanyang",
+                    "voice", voice,
                     "format", "wav",
                     "sample_rate", 16000
             ));
@@ -211,7 +247,7 @@ public class VoiceService {
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString());
 
-            System.out.println("[VoiceService/TTS-WAV] 响应: "
+            System.out.println("[VoiceService/TTS-WAV] voice=" + voice + "响应: "
                     + response.body().substring(0, Math.min(response.body().length(), 200)));
 
             // 3. 解析返回的音频 URL
