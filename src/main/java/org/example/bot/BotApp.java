@@ -91,6 +91,7 @@ public class BotApp {
     };
     /** 文档追问关键词（已废弃，FC 工具自动判断） */
     @Deprecated
+
     private static final String[] DOC_FOLLOWUP_KEYWORDS = {
         "文档", "文件", "这份", "那份", "刚才的文档", "刚才的文件", "总结的"
     };
