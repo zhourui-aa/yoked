@@ -2,11 +2,6 @@ package org.example.bot.service;
 
 import com.openai.models.FunctionDefinition;
 import com.google.gson.JsonObject;
-import org.example.bot.model.DrawIntent;
-import org.example.bot.model.ImageFollowUpIntent;
-import org.example.bot.model.SessionCommandIntent;
-import org.example.bot.model.VoiceReplyIntent;
-import org.example.bot.model.WeatherIntent;
 
 import java.util.List;
 import java.util.Map;
@@ -35,24 +30,6 @@ public interface AiService {
                          List<FunctionDefinition> tools,
                          Map<String, java.util.function.Function<JsonObject, String>> executors);
 
-    /** 分析是否想生成图片 */
-    DrawIntent extractDrawIntent(String userMessage);
-
-    /** 分析是否在查询天气 */
-    WeatherIntent extractWeatherIntent(String userMessage);
-
-    /** 分析是否在追问上一张图片 */
-    ImageFollowUpIntent extractImageFollowUpIntent(String userMessage);
-
-    /** 分析是否要求用语音回复 */
-    VoiceReplyIntent extractVoiceReplyIntent(String userMessage);
-
-    /**
-     * 分析是否为会话管理命令（新建/切换/删除/查看对话）。
-     * 失败时返回 {@code SessionCommandIntent.none()}。
-     */
-    SessionCommandIntent extractSessionCommandIntent(String userMessage);
-
     /**
      * 向当前会话历史中插入一条交互记录（不调用 AI）。
      */
@@ -63,12 +40,4 @@ public interface AiService {
 
     /** 修改当前会话的人设 */
     void setPersona(String userId, String persona);
-
-    /**
-     * @deprecated 请使用 {@link #chatWithTools(String, String, List, Map)}，
-     *             将天气注册为其中一个工具即可。
-     */
-    @Deprecated
-    String chatWithWeatherTool(String userId, String userMessage,
-                               java.util.function.Function<String, String> weatherExecutor);
 }
