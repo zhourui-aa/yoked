@@ -304,6 +304,12 @@ public class BotApp {
             return weather != null ? weather.query(city) : "天气服务未配置";
         });
 
+        // --- 金融计算器（始终可用）---
+        tools.add(functionDef("financial_calculator",
+                CalculatorTool.DESCRIPTION,
+                CalculatorTool.getParametersSchema()));
+        executors.put("financial_calculator", args -> new CalculatorTool().execute(args));
+
         // --- 图片生成（如果服务可用）---
         if (imageGen != null) {
             tools.add(functionDef("generate_image",
