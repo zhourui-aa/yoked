@@ -11,6 +11,7 @@ import org.example.bot.impl.DeepSeekAiServiceImpl;
 import org.example.bot.impl.DoubaoVisionServiceImpl;
 import org.example.bot.impl.QwenTtsSpeechServiceImpl;
 import org.example.bot.impl.SeedreamImageServiceImpl;
+import org.example.bot.util.CalculatorUtil;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -394,6 +395,78 @@ public class BotApp {
                     + "\n\n用户追问：" + question + "\n请根据文件内容回答。";
             });
         }
+        // ========== 计算器工具 ==========
+// 复利计算
+        tools.add(functionDef("calculate_compound_interest",
+                "计算复利终值。当用户询问复利、投资回报、利滚利等问题时调用。",
+                Map.of(
+                        "principal", Map.of("type", "number", "description", "本金金额"),
+                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 5 表示 5%）"),
+                        "years", Map.of("type", "integer", "description", "投资年限（整数）"),
+                        "times_per_year", Map.of("type", "integer", "description", "每年复利次数，默认 1")
+                )));
+        executors.put("calculate_compound_interest", args -> {
+            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
+            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int years = args.has("years") ? args.get("years").getAsInt() : 1;
+            int times = args.has("times_per_year") ? args.get("times_per_year").getAsInt() : 1;
+            if (principal <= 0 || rate <= 0 || years <= 0) {
+                return "参数不合法，请提供正确的本金、年利率和年限。";
+            }
+            return CalculatorUtil.compoundInterest(principal, rate, years, times);
+        });
+
+// 房贷计算
+        tools.add(functionDef("calculate_mortgage",
+                "计算等额本息房贷的月供。当用户询问房贷、月供、贷款还款时调用。",
+                Map.of(
+                        "principal", Map.of("type", "number", "description", "贷款总额（单位：元）"),
+                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 4.9 表示 4.9%）"),
+                        "years", Map.of("type", "integer", "description", "贷款年限（整数）")
+                )));
+        executors.put("calculate_mortgage", args -> {
+            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
+            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int years = args.has("years") ? args.get("years").getAsInt() : 0;
+            if (principal <= 0 || rate <= 0 || years <= 0) {
+                return "参数不合法，请提供正确的贷款总额、年利率和年限。";
+            }
+            return CalculatorUtil.mortgagePayment(principal, rate, years);
+        });
+
+// 税率计算
+        tools.add(functionDef("calculate_tax",
+                "计算税额及税后收入。当用户询问税费、所得税、扣税时调用。",
+                Map.of(
+                        "income", Map.of("type", "number", "description", "税前收入金额"),
+                        "rate", Map.of("type", "number", "description", "税率（百分比，如 20 表示 20%）")
+                )));
+        executors.put("calculate_tax", args -> {
+            double income = args.has("income") ? args.get("income").getAsDouble() : 0;
+            double rate = args.has("rate") ? args.get("rate").getAsDouble() : 0;
+            if (income <= 0 || rate <= 0) {
+                return "参数不合法，请提供正确的收入和税率。";
+            }
+            return CalculatorUtil.calculateTax(income, rate);
+        });
+
+// 汇率转换
+        tools.add(functionDef("convert_currency",
+                "实时汇率转换。当用户询问汇率、货币换算、兑换等时调用。",
+                Map.of(
+                        "amount", Map.of("type", "number", "description", "金额"),
+                        "from_currency", Map.of("type", "string", "description", "源货币代码，如 USD、CNY、EUR"),
+                        "to_currency", Map.of("type", "string", "description", "目标货币代码，如 USD、CNY、EUR")
+                )));
+        executors.put("convert_currency", args -> {
+            double amount = args.has("amount") ? args.get("amount").getAsDouble() : 0;
+            String from = args.has("from_currency") ? args.get("from_currency").getAsString() : "";
+            String to = args.has("to_currency") ? args.get("to_currency").getAsString() : "";
+            if (amount <= 0 || from.isBlank() || to.isBlank()) {
+                return "参数不合法，请提供金额和货币代码。";
+            }
+            return CalculatorUtil.convertCurrency(amount, from, to);
+        });
     }
 
     /** 快捷构建 FunctionDefinition */
