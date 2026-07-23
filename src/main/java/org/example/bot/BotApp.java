@@ -1,18 +1,10 @@
 package org.example.bot;
 
 import org.example.bot.ilink.ILinkBot;
+import org.example.bot.impl.*;
 import org.example.bot.model.BotMessage;
-import org.example.bot.service.AiService;
-import org.example.bot.service.ImageGenService;
-import org.example.bot.service.SpeechService;
-import org.example.bot.service.VisionService;
-import org.example.bot.service.WeatherBotService;
-import org.example.bot.impl.DeepSeekAiServiceImpl;
-import org.example.bot.impl.DoubaoVisionServiceImpl;
-import org.example.bot.impl.QwenTtsSpeechServiceImpl;
-import org.example.bot.impl.RssNewsServiceImpl;
-import org.example.bot.impl.SeedreamImageServiceImpl;
-import org.example.bot.service.NewsService;
+import org.example.bot.service.*;
+
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -41,6 +33,7 @@ import java.util.HashMap;
  */
 public class BotApp {
 
+    private static final DateTimeService dateTime = new DateTimeServiceImpl();
     /** 默认人设 */
     private static final String DEFAULT_PERSONA = "你是一个友好的微信AI助手。";
     /** 技术指令（不随人设变化，始终追加） */
@@ -48,6 +41,7 @@ public class BotApp {
         "你有语音回复能力，用户要求语音时你的文字会自动转语音，所以不要说你不能发语音。" +
         "回复简洁自然，适合朗读。" +
         "你可以查询天气、获取新闻、生成图片、识别图片、总结文件等。" +
+        "你可以同时调用多个工具或依次调用工具来满足用户的复杂需求，最终把所有结果整合在一起回复用户。" +
         "当用户问新闻相关问题时，直接调用 get_news 工具获取真实新闻，不要说你没有联网功能。";
 
     /** 生图专用线程池 — 避免阻塞主消息循环 */
@@ -317,7 +311,8 @@ public class BotApp {
         // --- 天气查询（始终可用）---
         tools.add(functionDef("get_weather",
             "查询指定城市的实时天气信息，包括温度、体感温度、湿度、天气状况、风速风向。" +
-            "当用户询问天气、气温、会不会下雨、冷不冷、热不热、穿什么衣服等问题时调用此工具。",
+            "当用户询问天气、气温、会不会下雨、冷不冷、热不热、穿什么衣服等问题时调用此工具。" +
+            "注意：你可以同时调用多个工具来满足用户的复合需求，比如同时查询多个城市的天气。",
             Map.of("city", Map.of("type", "string", "description", "城市名称，例如：北京、上海、东京"))));
         executors.put("get_weather", args -> {
             String city = args.has("city") ? args.get("city").getAsString() : "";
@@ -364,7 +359,8 @@ public class BotApp {
         // --- 图片生成（如果服务可用）---
         if (imageGen != null) {
             tools.add(functionDef("generate_image",
-                "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。",
+                "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。" +
+                 "你可以在查询天气之后调用此工具，根据天气信息生成对应的天气氛围图。",
                 Map.of("prompt", Map.of("type", "string", "description", "图片的详细描述，例如：一只在屋顶看星星的橘猫"))));
             executors.put("generate_image", args -> {
                 String prompt = args.has("prompt") ? args.get("prompt").getAsString() : "";
@@ -421,7 +417,7 @@ public class BotApp {
             Map.of()));
         executors.put("list_sessions", args -> sm.listSessions(userId));
 
-        // --- 图片追问（条件：有缓存图片 + 识图服务可用）---
+            // --- 图片追问（条件：有缓存图片 + 识图服务可用）---
         CachedImage cachedImg = LAST_IMAGE.get(userId);
         if (cachedImg != null && !cachedImg.expired() && vision != null) {
             tools.add(functionDef("ask_about_image",
@@ -437,6 +433,17 @@ public class BotApp {
                 }
             });
         }
+
+        // --- 日期时间查询（始终可用）---
+        tools.add(functionDef("get_datetime",
+                "查询指定城市或时区的当前日期时间。当用户问「现在几点」「当地时间」「东京现在几点」「纽约时间」等问题时调用。" +
+                "注意：你可以同时调用多个工具来满足用户的复合需求，比如查完天气再查时间。",
+                Map.of("timezone", Map.of("type", "string", "description",
+                        "时区或城市名称，例如：Asia/Shanghai、纽约、东京、洛杉矶、伦敦"))));
+        executors.put("get_datetime", args -> {
+            String tz = args.has("timezone") ? args.get("timezone").getAsString() : "Asia/Shanghai";
+            return dateTime.query(tz);
+        });
 
         // --- 文档追问（条件：有缓存文档）---
         CachedDoc cachedDoc = LAST_DOC.get(userId);
