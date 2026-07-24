@@ -22,6 +22,8 @@ import org.example.bot.service.NewsService;
 import org.example.bot.service.FootballService;
 import org.example.bot.service.DietService;
 import org.example.bot.service.DateTimeService;
+import org.example.bot.service.FinanceService;
+import org.example.bot.impl.FinanceServiceImpl;
 import org.example.bot.impl.RssNewsServiceImpl;
 import org.example.bot.impl.FootballServiceImpl;
 import org.example.bot.impl.DietServiceImpl;
@@ -134,8 +136,11 @@ public class BotApp {
         DietService diet = new DietServiceImpl();
         System.out.println("[Bot] 🥗 饮食推荐服务已就绪");
 
+        FinanceService finance = new FinanceServiceImpl();
+        System.out.println("[Bot] 💹 金融行情服务已就绪（股票/基金/加密货币）");
+
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -150,6 +155,7 @@ public class BotApp {
         final NewsService fNews = news;
         final FootballService fFootball = football;
         final DietService fDiet = diet;
+        final FinanceService fFinance = finance;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -159,7 +165,7 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, msg);
+                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, msg);
                 return;
             }
             if (msg.isImage()) {
@@ -175,7 +181,7 @@ public class BotApp {
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews,
+            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance,
                                userId, text, false);
         });
 
@@ -213,6 +219,7 @@ public class BotApp {
                                            FootballService football, DietService diet,
                                            WeatherBotService weather, VisionService vision,
                                            ImageGenService imageGen, NewsService news,
+                                           FinanceService finance,
                                            String userId, String text, boolean forceVoice) {
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
@@ -226,7 +233,7 @@ public class BotApp {
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors
             = new java.util.LinkedHashMap<>();
-        buildTools(tools, executors, bot, ai, calc, random, express, football, diet, weather, vision, imageGen, news, userId);
+        buildTools(tools, executors, bot, ai, calc, random, express, football, diet, weather, vision, imageGen, news, finance, userId);
 
         // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
@@ -331,7 +338,8 @@ public class BotApp {
             RandomService random, ExpressService express,
             FootballService football, DietService diet,
             WeatherBotService weather, VisionService vision,
-            ImageGenService imageGen, NewsService news, String userId) {
+            ImageGenService imageGen, NewsService news,
+            FinanceService finance, String userId) {
         toolCenter.buildTools(tools, executors, userId);
     }
 
@@ -347,7 +355,7 @@ public class BotApp {
             RandomService random, ExpressService express,
             FootballService football, DietService diet,
             ImageGenService imageGen, VisionService vision,
-            NewsService news) {
+            NewsService news, FinanceService finance) {
 
         BotState bs = botState(ai);
 
@@ -663,6 +671,36 @@ public class BotApp {
                     return express.query(tn, company, phone);
                 }));
         }
+
+        // ---- 股票行情 ----
+        toolCenter.register(new ToolDefinition("query_stock",
+            "查询 A 股股票实时行情。当用户询问股票、股价、股市、股票代码等问题时调用。" +
+            "股票代码为6位数字，如600036（招商银行）、000858（五粮液）。",
+            Map.of("code", Map.of("type", "string", "description", "股票代码，6位数字，如 600036")),
+            args -> {
+                String code = args.has("code") ? args.get("code").getAsString() : "";
+                return finance.queryStock(code);
+            }));
+
+        // ---- 基金净值估值 ----
+        toolCenter.register(new ToolDefinition("query_fund",
+            "查询基金净值和实时估值。当用户询问基金、净值、估值、理财等问题时调用。" +
+            "基金代码为6位数字，如000001（华夏成长）、161725（招商中证白酒）。",
+            Map.of("code", Map.of("type", "string", "description", "基金代码，6位数字，如 000001")),
+            args -> {
+                String code = args.has("code") ? args.get("code").getAsString() : "";
+                return finance.queryFund(code);
+            }));
+
+        // ---- 加密货币行情 ----
+        toolCenter.register(new ToolDefinition("query_crypto",
+            "查询加密货币实时价格。当用户询问比特币、BTC、以太坊、ETH、狗狗币、加密货币等问题时调用。" +
+            "支持 BTC、ETH、DOGE、SOL、XRP 等主流币种。",
+            Map.of("symbol", Map.of("type", "string", "description", "加密货币符号，如 BTC、ETH、DOGE")),
+            args -> {
+                String symbol = args.has("symbol") ? args.get("symbol").getAsString() : "";
+                return finance.queryCrypto(symbol);
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -844,6 +882,7 @@ public class BotApp {
                                      FootballService football, DietService diet,
                                      WeatherBotService weather, VisionService vision,
                                      ImageGenService imageGen, NewsService news,
+                                     FinanceService finance,
                                      BotMessage msg) {
         String userId = msg.userId();
         String text = msg.voiceText();
@@ -854,7 +893,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, calc, random, express, football, diet, weather, vision, imageGen, news, userId, text, true);
+        processTextMessage(bot, ai, tts, calc, random, express, football, diet, weather, vision, imageGen, news, finance, userId, text, true);
     }
 
     // ---- 工具方法 ----
