@@ -24,6 +24,7 @@ public class DeepSeekAiServiceImpl implements AiService {
     private final OpenAIClient client;
     private final Gson gson = new Gson();
     private final SessionManager sessionManager;
+    private final BotState botState;
 
     public DeepSeekAiServiceImpl(String defaultPersona, String techInstructions) {
 
@@ -39,9 +40,13 @@ public class DeepSeekAiServiceImpl implements AiService {
                 .baseUrl(BASE_URL)
                 .build();
         this.sessionManager = new SessionManager(defaultPersona, techInstructions);
+        this.botState = new BotState();
 
         System.out.println("[AI] DeepSeek 服务已就绪（模型: " + MODEL + "）");
     }
+
+    /** per-user 媒体缓存（图片、文档、新闻），线程安全 */
+    public BotState getBotState() { return botState; }
 
     @Override
     public void setPersona(String userId, String persona) {

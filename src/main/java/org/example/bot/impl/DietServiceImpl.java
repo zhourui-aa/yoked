@@ -94,6 +94,7 @@ public class DietServiceImpl implements DietService {
         }
 
         sb.append("\n⚠️ 以上为通用建议，如需精准方案请咨询营养师。");
+        sb.append("\n🚫 以上是全天总目标，不要编造用户已摄入数据或「剩余XX大卡」等追踪信息。");
         return sb.toString();
     }
 
