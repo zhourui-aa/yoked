@@ -60,7 +60,7 @@ public class BotApp {
     /** 上一次新闻查询缓存 — 支持追问 */
     private static final Map<String, CachedNews> LAST_NEWS = new HashMap<>();
     /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
-    private static final DateTimeService dateTime = new DateTimeServiceImpl(); // 5 分钟
+    private static final DateTimeService dateTime = new DateTimeServiceImpl();
 
     private static class CachedImage {
         final byte[] bytes;
@@ -131,13 +131,11 @@ public class BotApp {
         NewsService news = new RssNewsServiceImpl();
         System.out.println("[Bot] 📰 新闻服务已就绪");
 
-        FootballService football = null;
-        try { football = new FootballServiceImpl(); }
-        catch (Exception e) { System.out.println("[Bot] ⚠ 足球服务未启用: " + e.getMessage()); }
+        FootballService football = new FootballServiceImpl();
+        System.out.println("[Bot] ⚽ 足球数据服务已就绪");
 
-        DietService diet = null;
-        try { diet = new DietServiceImpl(); }
-        catch (Exception e) { System.out.println("[Bot] ⚠ 饮食推荐服务未启用: " + e.getMessage()); }
+        DietService diet = new DietServiceImpl();
+        System.out.println("[Bot] 🥗 饮食推荐服务已就绪");
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
