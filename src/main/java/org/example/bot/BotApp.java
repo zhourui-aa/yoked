@@ -683,18 +683,18 @@ public class BotApp {
         }
         String prompt = msg.text().isEmpty() ? null : msg.text();
         System.out.println("[Bot] 👁 检测到图片消息，开始识别...");
-        String result = vision.analyze(msg.imageBytes(), prompt);
-        System.out.println("[回复] " + result);
+        String visionResult = vision.analyze(msg.imageBytes(), prompt);
+        System.out.println("[识别] " + visionResult);
         // 缓存图片，支持后续追问
         LAST_IMAGE.put(msg.userId(), new CachedImage(msg.imageBytes()));
 
-        // 记入对话历史，让 AI 知道刚才识图的内容
-        ai.record(msg.userId(), "[发送了一张图片" + (prompt != null ? "，询问：" + prompt : "") + "]",
-                  result);
-
-        // 追加追问提示
-        result += "\n\n💡 你可以继续追问，比如「照片里有什么动物」「这是什么地方」";
-        bot.sendTextWithTyping(msg.userId(), result, 500L);
+        // 让 AI 结合对话历史生成上下文相关的回复，而不是直接发送生硬的识别结果
+        String aiPrompt = "用户刚才发了一张图片，图片识别结果如下：\n\n" + visionResult
+            + "\n\n请根据你和用户之前的对话上下文（如果有的话），用自然的口吻回应用户。" +
+            "如果图片内容和之前的聊天话题相关，请主动关联起来。不要机械地复述图片内容。";
+        String reply = ai.chat(msg.userId(), aiPrompt);
+        System.out.println("[回复] " + reply);
+        bot.sendTextWithTyping(msg.userId(), reply, 500L);
     }
 
     // ---- 语音消息（提取文字 → 统一路由 → 强制语音回复）----
