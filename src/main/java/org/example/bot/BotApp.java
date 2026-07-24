@@ -11,9 +11,22 @@ import org.example.bot.impl.DeepSeekAiServiceImpl;
 import org.example.bot.impl.DoubaoVisionServiceImpl;
 import org.example.bot.impl.QwenTtsSpeechServiceImpl;
 import org.example.bot.impl.SeedreamImageServiceImpl;
+import org.example.bot.impl.CalculatorServiceImpl;
 import org.example.bot.service.CalculatorService;
-import org.example.bot.service.ExpressService;
 import org.example.bot.service.RandomService;
+import org.example.bot.service.ExpressService;
+import org.example.bot.impl.RandomServiceImpl;
+import org.example.bot.impl.ExpressServiceImpl;
+import org.example.bot.service.NewsService;
+import org.example.bot.service.FootballService;
+import org.example.bot.service.DietService;
+import org.example.bot.service.DateTimeService;
+import org.example.bot.impl.RssNewsServiceImpl;
+import org.example.bot.impl.FootballServiceImpl;
+import org.example.bot.impl.DietServiceImpl;
+import org.example.bot.impl.DateTimeServiceImpl;
+import org.example.bot.service.FinanceService;
+import org.example.bot.impl.FinanceServiceImpl;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -47,7 +60,10 @@ public class BotApp {
     private static final String DEFAULT_PERSONA = "你是一个友好的微信AI助手。";
     /** 技术指令（不随人设变化，始终追加） */
     private static final String TECH_INSTRUCTIONS = "你有语音回复能力，用户要求语音时你的文字会自动转语音，所以不要说你不能发语音。" +
-            "回复简洁自然，适合朗读。";
+            "回复简洁自然，适合朗读。" +
+            "你可以查询天气、获取新闻、生成图片、识别图片、总结文件等。" +
+            "你可以同时调用多个工具或依次调用工具来满足用户的复杂需求，最终把所有结果整合在一起回复用户。" +
+            "当用户问新闻相关问题时，直接调用 get_news 工具获取真实新闻，不要说你没有联网功能。";
 
     /** 生图专用线程池 — 避免阻塞主消息循环 */
     private static final ExecutorService IMAGE_EXECUTOR = Executors.newFixedThreadPool(1, r -> {
@@ -61,7 +77,11 @@ public class BotApp {
     private static final long IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 
     /** 上一份文档缓存 — 支持追问 */
-    private static final Map<String, CachedDoc> LAST_DOC = new HashMap<>(); // 5 分钟
+    private static final Map<String, CachedDoc> LAST_DOC = new HashMap<>();
+    /** 上一次新闻查询缓存 — 支持追问 */
+    private static final Map<String, CachedNews> LAST_NEWS = new HashMap<>();
+    /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
+    private static final DateTimeService dateTime = new DateTimeServiceImpl();
 
     private static class CachedImage {
         final byte[] bytes;
@@ -93,17 +113,20 @@ public class BotApp {
         }
     }
 
-    /** 图片追问关键词 — 仅匹配明显指向图片的说法（已废弃，FC 工具自动判断） */
-    @Deprecated
-    private static final String[] IMAGE_FOLLOWUP_KEYWORDS = {
-            "照片", "图片", "这张", "那张", "图中", "图里", "这图", "那个图", "这里面", "图上"
-    };
-    /** 文档追问关键词（已废弃，FC 工具自动判断） */
-    @Deprecated
+    /** 缓存的新闻条目列表 — 支持追问 */
+    private static class CachedNews {
+        final java.util.List<NewsService.NewsItem> items;
+        final long timestamp;
 
-    private static final String[] DOC_FOLLOWUP_KEYWORDS = {
-            "文档", "文件", "这份", "那份", "刚才的文档", "刚才的文件", "总结的"
-    };
+        CachedNews(java.util.List<NewsService.NewsItem> items) {
+            this.items = items;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        boolean expired() {
+            return System.currentTimeMillis() - timestamp > IMAGE_CACHE_TTL_MS;
+        }
+    }
 
     // 语音回复关键词 — 无需 AI 确认，关键词命中即生效
     private static final String[] VOICE_REPLY_KEYWORDS = {
@@ -144,12 +167,41 @@ public class BotApp {
             System.out.println("[Bot] ⚠ 语音合成服务未启用: " + e.getMessage());
         }
 
+        CalculatorService calc = new CalculatorServiceImpl();
+
+        RandomService random = new RandomServiceImpl();
+
+        ExpressService express = null;
+        try {
+            express = new ExpressServiceImpl();
+        } catch (IllegalStateException e) {
+            System.out.println("[Bot] ⚠ 快递查询服务未启用: " + e.getMessage());
+        }
+
+        NewsService news = new RssNewsServiceImpl();
+        System.out.println("[Bot] 📰 新闻服务已就绪");
+
+        FootballService football = new FootballServiceImpl();
+        System.out.println("[Bot] ⚽ 足球数据服务已就绪");
+
+        DietService diet = new DietServiceImpl();
+        System.out.println("[Bot] 🥗 饮食推荐服务已就绪");
+
+        FinanceService finance = new FinanceServiceImpl();
+
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
         final VisionService fVision = vision;
         final SpeechService fTts = tts;
         final AiService fAi = ai;
         final WeatherBotService fWeather = weather;
+        final CalculatorService fCalc = calc;
+        final RandomService fRandom = random;
+        final ExpressService fExpress = express;
+        final NewsService fNews = news;
+        final FootballService fFootball = football;
+        final DietService fDiet = diet;
+        final FinanceService fFinance = finance;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         bot.setHandler(msg -> {
@@ -158,7 +210,8 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                         + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fWeather, fVision, fImageGen, msg);
+                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fFinance, fWeather, fVision,
+                        fImageGen, fNews, msg);
                 return;
             }
             if (msg.isImage()) {
@@ -174,7 +227,8 @@ public class BotApp {
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fWeather, fVision, fImageGen,
+            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fFinance, fWeather, fVision,
+                    fImageGen, fNews,
                     userId, text, false);
         });
 
@@ -208,8 +262,12 @@ public class BotApp {
      * @param forceVoice {@code true} 表示这条消息来自语音输入，回复必须带语音
      */
     private static void processTextMessage(ILinkBot bot, AiService ai, SpeechService tts,
+            CalculatorService calc,
+            RandomService random, ExpressService express,
+            FootballService football, DietService diet,
+            FinanceService finance,
             WeatherBotService weather, VisionService vision,
-            ImageGenService imageGen,
+            ImageGenService imageGen, NewsService news,
             String userId, String text, boolean forceVoice) {
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text))
@@ -224,7 +282,8 @@ public class BotApp {
         // ③ 构建工具列表 — 根据当前状态动态决定哪些工具可用
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors = new java.util.LinkedHashMap<>();
-        buildTools(tools, executors, bot, ai, weather, vision, imageGen, userId);
+        buildTools(tools, executors, bot, ai, calc, random, express, football, diet, finance, weather, vision, imageGen,
+                news, userId);
 
         // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
@@ -311,8 +370,12 @@ public class BotApp {
             java.util.List<FunctionDefinition> tools,
             java.util.Map<String, java.util.function.Function<JsonObject, String>> executors,
             ILinkBot bot, AiService ai,
+            CalculatorService calc,
+            RandomService random, ExpressService express,
+            FootballService football, DietService diet,
+            FinanceService finance,
             WeatherBotService weather, VisionService vision,
-            ImageGenService imageGen, String userId) {
+            ImageGenService imageGen, NewsService news, String userId) {
 
         // --- 天气查询（始终可用）---
         tools.add(functionDef("get_weather",
@@ -324,7 +387,177 @@ public class BotApp {
             return weather != null ? weather.query(city) : "天气服务未配置";
         });
 
-        // --- 图片生成（如果服务可用）---
+        // --- 新闻获取（始终可用）---
+        tools.add(functionDef("get_news",
+                "获取最新新闻。当用户询问任何新闻、热点、时事、最新消息时调用此工具。" +
+                        "即使用户问「你能查新闻吗」「有什么新闻」等关于新闻能力的问题，也调用此工具来展示实际新闻。" +
+                        "类别可选：综合、国际、科技、财经、体育、文化、健康、教育。",
+                Map.of("category", Map.of("type", "string",
+                        "description", "新闻类别。用户提到具体类别时传入，否则传「综合」。"))));
+        executors.put("get_news", args -> {
+            String category = "综合";
+            try {
+                if (args.has("category") && !args.get("category").isJsonNull())
+                    category = args.get("category").getAsString();
+            } catch (Exception ignored) {
+            }
+            String result = news.getNews(category, 8);
+            LAST_NEWS.put(userId, new CachedNews(news.getLastResults()));
+            return result;
+        });
+
+        // --- 新闻详情（条件：刚查过新闻）---
+        if (news.isAvailable()) {
+            tools.add(functionDef("read_news_article",
+                    "用户想了解某条新闻的详细内容。用户说「第X条」「某标题详细说说」等时调用。" +
+                            "传入新闻标题中的关键词即可，不要编造序号。工具只返回标题和摘要，没有全文。禁止编造正文。",
+                    Map.of("query", Map.of("type", "string",
+                            "description", "新闻标题关键词，例如「女排」。不要传序号。"))));
+            executors.put("read_news_article", args -> {
+                String query = "";
+                try {
+                    if (args.has("query") && !args.get("query").isJsonNull())
+                        query = args.get("query").getAsString();
+                } catch (Exception ignored) {
+                }
+                if (query.isBlank() && args.has("index") && !args.get("index").isJsonNull()) {
+                    try {
+                        return news.getArticleDetail(String.valueOf(args.get("index").getAsInt()));
+                    } catch (Exception ignored) {
+                    }
+                }
+                CachedNews cn = LAST_NEWS.get(userId);
+                if (cn == null || cn.expired())
+                    return "请先查询新闻。";
+                return news.getArticleDetail(query);
+            });
+        }
+
+        // --- 英超足球数据（如果服务可用）---
+        if (football != null) {
+            tools.add(functionDef("get_premier_league_standings",
+                    "查询英超积分榜排名。用户说「英超积分榜」「英超排名」「英超战绩」「现在谁第一」等时调用。",
+                    Map.of("top", Map.of("type", "integer", "description", "返回前几名，填0或5表示前5名，填0表示全部20队"))));
+            executors.put("get_premier_league_standings", args -> {
+                int top = args.has("top") ? args.get("top").getAsInt() : 0;
+                return football.getStandings(top);
+            });
+
+            tools.add(functionDef("get_premier_league_matches",
+                    "查询英超最近比赛结果或赛程。用户说「最近英超比赛」「英超战况」「英超结果」「英超赛程」等时调用。",
+                    Map.of(
+                            "type", Map.of("type", "string", "description", "recent=最近已结束的比赛, upcoming=即将进行的比赛"),
+                            "count", Map.of("type", "integer", "description", "返回场次数，默认5"))));
+            executors.put("get_premier_league_matches", args -> {
+                String type = args.has("type") ? args.get("type").getAsString() : "recent";
+                int count = args.has("count") ? args.get("count").getAsInt() : 5;
+                if ("upcoming".equals(type)) {
+                    return football.getUpcomingMatches(count);
+                } else {
+                    return football.getRecentMatches(count);
+                }
+            });
+
+            tools.add(functionDef("get_premier_league_matchday",
+                    "查询英超指定轮次的比赛结果。用户说「第X轮」「Matchday X」等时调用。",
+                    Map.of("matchday", Map.of("type", "string", "description", "轮次，如 Matchday 1、第5轮"))));
+            executors.put("get_premier_league_matchday", args -> {
+                String md = args.has("matchday") ? args.get("matchday").getAsString() : "";
+                return football.getMatchdayResults(md);
+            });
+
+            tools.add(functionDef("search_football_news",
+                    "搜索懂球帝足球新闻、转会消息。用户说「转会消息」「最新转会」「XX队新闻」「足球新闻」等时调用。",
+                    Map.of("keyword", Map.of("type", "string", "description", "搜索关键词，如：转会、英超、利物浦、曼联"))));
+            executors.put("search_football_news", args -> {
+                String kw = args.has("keyword") ? args.get("keyword").getAsString() : "英超转会";
+                return football.searchNews(kw);
+            });
+        }
+
+        // --- 饮食推荐（如果服务可用）---
+        if (diet != null) {
+            tools.add(functionDef("get_diet_recommendation",
+                    "根据用户的身高、体重、目标（减脂/增肌）生成个性化饮食推荐方案。" +
+                            "当用户说「饮食推荐」「吃什么」「减肥怎么吃」「增肌饮食」「减脂餐」「健身饮食」等时调用。" +
+                            "必须先从用户处获取身高(cm)、体重(kg)、目标这三个信息，缺一不可。如果用户没提供完整，请逐项询问。",
+                    Map.of(
+                            "heightCm", Map.of("type", "integer", "description", "身高（厘米），必须由用户明确提供"),
+                            "weightKg", Map.of("type", "number", "description", "体重（公斤），必须由用户明确提供"),
+                            "goal", Map.of("type", "string", "description", "目标：减脂或增肌，必须由用户明确说明"))));
+            executors.put("get_diet_recommendation", args -> {
+                int height = args.has("heightCm") ? args.get("heightCm").getAsInt() : 0;
+                double weight = args.has("weightKg") ? args.get("weightKg").getAsDouble() : 0;
+                String goal = args.has("goal") ? args.get("goal").getAsString() : "";
+                return diet.getRecommendation(height, weight, goal);
+            });
+        }
+
+        // --- 金融计算器（始终可用）---
+        // 复利计算
+        tools.add(functionDef("calculate_compound_interest",
+                "计算复利终值。当用户询问复利、投资回报、利滚利等问题时调用。" +
+                        "需要本金、年利率、年限，可选每年复利次数（默认1）。",
+                Map.of(
+                        "principal", Map.of("type", "number", "description", "本金金额（元）"),
+                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 5 表示 5%）"),
+                        "years", Map.of("type", "integer", "description", "投资年限"),
+                        "times_per_year", Map.of("type", "integer", "description", "每年复利次数，默认 1，按月复利填 12"))));
+        executors.put("calculate_compound_interest", args -> {
+            double p = args.has("principal") ? args.get("principal").getAsDouble() : 0;
+            double r = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int y = args.has("years") ? args.get("years").getAsInt() : 1;
+            int t = args.has("times_per_year") ? args.get("times_per_year").getAsInt() : 1;
+            return calc.compoundInterest(p, r, y, t);
+        });
+
+        // 房贷计算
+        tools.add(functionDef("calculate_mortgage",
+                "计算房贷月供（等额本息或等额本金）。当用户询问房贷、月供、贷款还款时调用。" +
+                        "需要贷款总额、年利率、年限。",
+                Map.of(
+                        "loan_amount", Map.of("type", "number", "description", "贷款总额（元）"),
+                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 4.9 表示 4.9%）"),
+                        "years", Map.of("type", "integer", "description", "贷款年限"),
+                        "method", Map.of("type", "string", "description",
+                                "还款方式：equal_interest（等额本息，默认）、equal_principal（等额本金）"))));
+        executors.put("calculate_mortgage", args -> {
+            double loan = args.has("loan_amount") ? args.get("loan_amount").getAsDouble() : 0;
+            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int years = args.has("years") ? args.get("years").getAsInt() : 0;
+            String method = args.has("method") ? args.get("method").getAsString() : "equal_interest";
+            return calc.mortgage(loan, rate, years, method);
+        });
+
+        // 个税计算
+        tools.add(functionDef("calculate_tax",
+                "计算个人所得税及税后收入（2024年累进税率表）。当用户询问个税、所得税、扣税、税后工资时调用。" +
+                        "需要税前月薪，可选五险一金金额和专项附加扣除。",
+                Map.of(
+                        "monthly_salary", Map.of("type", "number", "description", "税前月薪（元）"),
+                        "social_insurance", Map.of("type", "number", "description", "五险一金金额，填0则按10.5%估算"),
+                        "special_deduction", Map.of("type", "number", "description", "专项附加扣除金额，默认0"))));
+        executors.put("calculate_tax", args -> {
+            double salary = args.has("monthly_salary") ? args.get("monthly_salary").getAsDouble() : 0;
+            double insurance = args.has("social_insurance") ? args.get("social_insurance").getAsDouble() : 0;
+            double deduction = args.has("special_deduction") ? args.get("special_deduction").getAsDouble() : 0;
+            return calc.calculateTax(salary, insurance, deduction);
+        });
+
+        // 汇率转换
+        tools.add(functionDef("convert_currency",
+                "实时汇率转换。当用户询问汇率、货币换算、兑换时调用。" +
+                        "需要金额、源货币代码、目标货币代码。",
+                Map.of(
+                        "amount", Map.of("type", "number", "description", "金额"),
+                        "from_currency", Map.of("type", "string", "description", "源货币代码，如 USD、CNY、EUR、JPY"),
+                        "to_currency", Map.of("type", "string", "description", "目标货币代码，如 USD、CNY、EUR、JPY"))));
+        executors.put("convert_currency", args -> {
+            double amount = args.has("amount") ? args.get("amount").getAsDouble() : 0;
+            String from = args.has("from_currency") ? args.get("from_currency").getAsString() : "";
+            String to = args.has("to_currency") ? args.get("to_currency").getAsString() : "";
+            return calc.convertCurrency(amount, from, to);
+        });
         if (imageGen != null) {
             tools.add(functionDef("generate_image",
                     "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。",
@@ -350,6 +583,17 @@ public class BotApp {
                 return "图片生成已启动，主题：「" + p + "」。预计 10~30 秒完成。";
             });
         }
+
+        // --- 日期时间查询（始终可用）---
+        tools.add(functionDef("get_datetime",
+                "查询指定城市或时区的当前日期时间。当用户问「现在几点」「当地时间」「东京现在几点」「纽约时间」等问题时调用。" +
+                        "注意：你可以同时调用多个工具来满足用户的复合需求，比如查完天气再查时间。",
+                Map.of("timezone", Map.of("type", "string", "description",
+                        "时区或城市名称，例如：Asia/Shanghai、纽约、东京、洛杉矶、伦敦"))));
+        executors.put("get_datetime", args -> {
+            String tz = args.has("timezone") ? args.get("timezone").getAsString() : "Asia/Shanghai";
+            return dateTime.query(tz);
+        });
 
         // --- 会话管理（始终可用）---
         var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
@@ -416,74 +660,6 @@ public class BotApp {
                         + "\n\n用户追问：" + question + "\n请根据文件内容回答。";
             });
         }
-        // ========== 计算器工具 ==========
-        // 复利计算
-        tools.add(functionDef("calculate_compound_interest",
-                "计算复利终值。当用户询问复利、投资回报、利滚利等问题时调用。",
-                Map.of(
-                        "principal", Map.of("type", "number", "description", "本金金额"),
-                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 5 表示 5%）"),
-                        "years", Map.of("type", "integer", "description", "投资年限（整数）"),
-                        "times_per_year", Map.of("type", "integer", "description", "每年复利次数，默认 1"))));
-        executors.put("calculate_compound_interest", args -> {
-            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
-            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
-            int years = args.has("years") ? args.get("years").getAsInt() : 1;
-            int times = args.has("times_per_year") ? args.get("times_per_year").getAsInt() : 1;
-            if (principal <= 0 || rate <= 0 || years <= 0) {
-                return "参数不合法，请提供正确的本金、年利率和年限。";
-            }
-            return CalculatorService.compoundInterest(principal, rate, years, times);
-        });
-
-        // 房贷计算
-        tools.add(functionDef("calculate_mortgage",
-                "计算等额本息房贷的月供。当用户询问房贷、月供、贷款还款时调用。",
-                Map.of(
-                        "principal", Map.of("type", "number", "description", "贷款总额（单位：元）"),
-                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 4.9 表示 4.9%）"),
-                        "years", Map.of("type", "integer", "description", "贷款年限（整数）"))));
-        executors.put("calculate_mortgage", args -> {
-            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
-            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
-            int years = args.has("years") ? args.get("years").getAsInt() : 0;
-            if (principal <= 0 || rate <= 0 || years <= 0) {
-                return "参数不合法，请提供正确的贷款总额、年利率和年限。";
-            }
-            return CalculatorService.mortgagePayment(principal, rate, years);
-        });
-
-        // 税率计算
-        tools.add(functionDef("calculate_tax",
-                "计算税额及税后收入。当用户询问税费、所得税、扣税时调用。",
-                Map.of(
-                        "income", Map.of("type", "number", "description", "税前收入金额"),
-                        "rate", Map.of("type", "number", "description", "税率（百分比，如 20 表示 20%）"))));
-        executors.put("calculate_tax", args -> {
-            double income = args.has("income") ? args.get("income").getAsDouble() : 0;
-            double rate = args.has("rate") ? args.get("rate").getAsDouble() : 0;
-            if (income <= 0 || rate <= 0) {
-                return "参数不合法，请提供正确的收入和税率。";
-            }
-            return CalculatorService.calculateTax(income, rate);
-        });
-
-        // 汇率转换
-        tools.add(functionDef("convert_currency",
-                "实时汇率转换。当用户询问汇率、货币换算、兑换等时调用。",
-                Map.of(
-                        "amount", Map.of("type", "number", "description", "金额"),
-                        "from_currency", Map.of("type", "string", "description", "源货币代码，如 USD、CNY、EUR"),
-                        "to_currency", Map.of("type", "string", "description", "目标货币代码，如 USD、CNY、EUR"))));
-        executors.put("convert_currency", args -> {
-            double amount = args.has("amount") ? args.get("amount").getAsDouble() : 0;
-            String from = args.has("from_currency") ? args.get("from_currency").getAsString() : "";
-            String to = args.has("to_currency") ? args.get("to_currency").getAsString() : "";
-            if (amount <= 0 || from.isBlank() || to.isBlank()) {
-                return "参数不合法，请提供金额和货币代码。";
-            }
-            return CalculatorService.convertCurrency(amount, from, to);
-        });
 
         // ========== 随机工具 ==========
         tools.add(functionDef("roll_dice",
@@ -494,7 +670,7 @@ public class BotApp {
         executors.put("roll_dice", args -> {
             int count = args.has("count") ? args.get("count").getAsInt() : 1;
             int sides = args.has("sides") ? args.get("sides").getAsInt() : 6;
-            return RandomService.rollDice(count, sides);
+            return random.rollDice(count, sides);
         });
 
         tools.add(functionDef("random_number",
@@ -506,7 +682,7 @@ public class BotApp {
             if (!args.has("min") || !args.has("max")) {
                 return "请提供 min 和 max 参数。";
             }
-            return RandomService.randomInt(args.get("min").getAsInt(), args.get("max").getAsInt());
+            return random.randomInt(args.get("min").getAsInt(), args.get("max").getAsInt());
         });
 
         tools.add(functionDef("random_choice",
@@ -522,32 +698,34 @@ public class BotApp {
             var arr = args.get("options").getAsJsonArray();
             java.util.List<String> options = new java.util.ArrayList<>();
             arr.forEach(el -> options.add(el.getAsString()));
-            return RandomService.randomChoice(options);
+            return random.randomChoice(options);
         });
 
         tools.add(functionDef("flip_coin",
                 "抛硬币。当用户说抛硬币、正反面、猜正反等问题时调用。",
                 Map.of()));
-        executors.put("flip_coin", args -> RandomService.flipCoin());
+        executors.put("flip_coin", args -> random.flipCoin());
 
-        // ========== 快递查询 ==========
-        tools.add(functionDef("track_express",
-                "查询快递物流轨迹。当用户询问快递、物流、包裹、单号到哪里了、查快递等问题时调用。",
-                Map.of(
-                        "tracking_number", Map.of("type", "string", "description", "快递单号"),
-                        "company", Map.of("type", "string", "description", "快递公司，可选，如顺丰、圆通、中通。不提供则自动识别"),
-                        "phone", Map.of("type", "string", "description", "手机号后四位，查询顺丰快递时必填"))));
-        executors.put("track_express", args -> {
-            String trackingNumber = args.has("tracking_number")
-                    ? args.get("tracking_number").getAsString()
-                    : "";
-            String company = args.has("company") ? args.get("company").getAsString() : null;
-            String phone = args.has("phone") ? args.get("phone").getAsString() : null;
-            if (trackingNumber.isBlank()) {
-                return "请提供快递单号。";
-            }
-            return ExpressService.query(trackingNumber, company, phone);
-        });
+        // ========== 快递查询（条件：API Key 已配置）==========
+        if (express != null) {
+            tools.add(functionDef("track_express",
+                    "查询快递物流轨迹。当用户询问快递、物流、包裹、单号到哪里了、查快递等问题时调用。",
+                    Map.of(
+                            "tracking_number", Map.of("type", "string", "description", "快递单号"),
+                            "company", Map.of("type", "string", "description", "快递公司，可选，如顺丰、圆通、中通。不提供则自动识别"),
+                            "phone", Map.of("type", "string", "description", "手机号后四位，查询顺丰快递时必填"))));
+            executors.put("track_express", args -> {
+                String trackingNumber = args.has("tracking_number")
+                        ? args.get("tracking_number").getAsString()
+                        : "";
+                String company = args.has("company") ? args.get("company").getAsString() : null;
+                String phone = args.has("phone") ? args.get("phone").getAsString() : null;
+                if (trackingNumber.isBlank()) {
+                    return "请提供快递单号。";
+                }
+                return express.query(trackingNumber, company, phone);
+            });
+        }
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -731,8 +909,13 @@ public class BotApp {
     // ---- 语音消息（提取文字 → 统一路由 → 强制语音回复）----
 
     private static void handleVoice(ILinkBot bot, AiService ai, SpeechService tts,
+            CalculatorService calc,
+            RandomService random, ExpressService express,
+            FootballService football, DietService diet,
+            FinanceService finance,
             WeatherBotService weather, VisionService vision,
-            ImageGenService imageGen, BotMessage msg) {
+            ImageGenService imageGen, NewsService news,
+            BotMessage msg) {
         String userId = msg.userId();
         String text = msg.voiceText();
         if (text == null || text.isBlank()) {
@@ -742,7 +925,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, weather, vision, imageGen, userId, text, true);
+        processTextMessage(bot, ai, tts, calc, random, express, football, diet, finance, weather, vision, imageGen, news, userId, text, true);
     }
 
     // ---- 工具方法 ----

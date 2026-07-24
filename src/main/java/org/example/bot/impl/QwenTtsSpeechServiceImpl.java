@@ -106,14 +106,23 @@ public class QwenTtsSpeechServiceImpl implements SpeechService {
     }
 
     private AudioParameters.Voice parseVoice(String v) {
-        try { return AudioParameters.Voice.valueOf(v.toUpperCase()); }
-        catch (IllegalArgumentException e) { return AudioParameters.Voice.CHERRY; }
+        try {
+            return AudioParameters.Voice.valueOf(v.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return AudioParameters.Voice.CHERRY;
+        }
     }
 
     private byte[] downloadAudio(String url) throws IOException, InterruptedException {
-        HttpRequest req = HttpRequest.newBuilder().uri(URI.create(url)).timeout(DOWNLOAD_TIMEOUT).GET().build();
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .timeout(DOWNLOAD_TIMEOUT)
+                .GET()
+                .build();
         HttpResponse<byte[]> resp = httpClient.send(req, HttpResponse.BodyHandlers.ofByteArray());
-        if (resp.statusCode() != 200) throw new IOException("HTTP " + resp.statusCode());
+        if (resp.statusCode() != 200) {
+            throw new IOException("HTTP " + resp.statusCode());
+        }
         byte[] data = resp.body();
         System.out.println("[TTS] 音频: " + (data.length / 1024) + " KB");
         return data;
