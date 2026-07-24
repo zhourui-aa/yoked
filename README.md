@@ -20,6 +20,7 @@
 | 🎲 随机工具 | 掷骰子/随机数/抽签/抛硬币 | 内置 |
 | 📄 文件总结 | 发 TXT/PDF/Word/Excel 自动总结 | DeepSeek |
 | 🔄 多会话 | 一个用户多个独立对话 | 内置 |
+| 🤖 多 Bot | 多个微信号同时在线，运行时动态新增 | SDK 多实例 |
 
 ## 快速开始
 
@@ -79,7 +80,11 @@ kdniao.app.key=你的app-key
 ### 4. 运行
 
 ```bash
+# 单 bot（默认）
 mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp"
+
+# 多 bot（启动时 3 个微信号同时扫码）
+mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp" -Dbots=3
 ```
 
 终端会打印微信登录二维码，用微信小号扫码即可。
@@ -109,6 +114,7 @@ mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp"
 | `删掉 xxx` | 删除会话 |
 | `切换音色 xxx` | 换 TTS 音色（14 种可选） |
 | `查看音色库` | 查看可用音色 |
+| `新建bot xxx` | 运行时动态新增一个微信号（终端打印新二维码） |
 
 发送图片、PDF、Word、Excel 等文件也会自动识别/总结。
 
@@ -116,8 +122,12 @@ mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp"
 
 ```
 src/main/java/org/example/bot/
-├── BotApp.java                          # 主程序入口 + 消息路由
-├── ilink/ILinkBot.java                  # 微信 SDK 门面
+├── BotApp.java                          # 主程序入口 + 消息路由 + 工具注册
+├── Diagnostic.java                      # 诊断工具
+├── ilink/                               # 微信 SDK 封装
+│   ├── ILinkBot.java                    #   微信 SDK 门面（登录/收/发）
+│   ├── BotMessage.java                  #   消息载体（文字/图片/语音/文件）
+│   └── BotCluster.java                  #   Bot 集群（多微信号管理 + 动态新增）
 ├── service/                             # 服务接口（可插拔）
 │   ├── AiService.java                   #   AI 对话接口
 │   ├── ImageGenService.java             #   生图接口
@@ -130,9 +140,10 @@ src/main/java/org/example/bot/
 │   ├── DateTimeService.java             #   日期时间接口
 │   ├── CalculatorService.java           #   金融计算接口
 │   ├── ExpressService.java              #   快递查询接口
-│   └── RandomService.java              #   随机工具接口
+│   └── RandomService.java               #   随机工具接口
 ├── impl/                                # 服务实现
 │   ├── DeepSeekAiServiceImpl.java       #   DeepSeek 对话 + Function Calling
+│   ├── BotState.java                    #   线程安全缓存（图片/文档/新闻）
 │   ├── SeedreamImageServiceImpl.java    #   火山引擎生图
 │   ├── DoubaoVisionServiceImpl.java     #   豆包识图
 │   ├── QwenTtsSpeechServiceImpl.java    #   阿里云 TTS
@@ -145,9 +156,12 @@ src/main/java/org/example/bot/
 │   ├── RandomServiceImpl.java           #   随机工具
 │   ├── SessionManager.java              #   多会话管理
 │   └── Session.java                     #   会话数据结构
-├── model/                               # 数据模型
-│   └── BotMessage.java
-└── util/                                # 工具类
+├── tools/                               # 工具中心（FC 工具注册与管理）
+│   ├── ToolCenter.java                  #   注册中心
+│   ├── ToolDefinition.java              #   工具定义数据类
+│   ├── ToolCondition.java               #   条件判断接口
+│   └── ToolContributor.java             #   服务贡献工具接口
+└── util/
     └── ConfigUtil.java                  # 配置读取工具
 ```
 
