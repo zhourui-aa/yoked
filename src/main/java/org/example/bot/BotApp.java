@@ -26,6 +26,8 @@ import org.example.bot.service.FinanceService;
 import org.example.bot.service.WebReaderService;
 import org.example.bot.impl.FinanceServiceImpl;
 import org.example.bot.impl.WebReaderServiceImpl;
+import org.example.bot.service.WebSearchService;
+import org.example.bot.impl.WebSearchServiceImpl;
 import org.example.bot.impl.RssNewsServiceImpl;
 import org.example.bot.impl.FootballServiceImpl;
 import org.example.bot.impl.DietServiceImpl;
@@ -144,8 +146,12 @@ public class BotApp {
         WebReaderService webReader = new WebReaderServiceImpl();
         System.out.println("[Bot] 📖 网页读取服务已就绪（文章抓取与摘要）");
 
+        WebSearchService search = null;
+        try { search = new WebSearchServiceImpl(); }
+        catch (IllegalStateException e) { System.out.println("[Bot] ⚠ 联网搜索服务未启用: " + e.getMessage()); }
+
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -162,6 +168,7 @@ public class BotApp {
         final DietService fDiet = diet;
         final FinanceService fFinance = finance;
         final WebReaderService fWebReader = webReader;
+        final WebSearchService fSearch = search;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -363,7 +370,7 @@ public class BotApp {
             FootballService football, DietService diet,
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
-            WebReaderService webReader) {
+            WebReaderService webReader, WebSearchService search) {
 
         BotState bs = botState(ai);
 
@@ -710,7 +717,7 @@ public class BotApp {
                 return finance.queryCrypto(symbol);
             }));
 
-        // ---- 网页内容抓取与摘要 ----
+// ---- 网页内容抓取与摘要 ----
         toolCenter.register(new ToolDefinition("read_web_page",
             "读取网页内容并总结要点。当用户发来一篇微信公众号文章或新闻链接，需要提取正文并总结时调用。" +
             "支持微信公众号、新闻网站等常见网页。用户说「读链接」「帮我读这篇文章」「总结一下」等时调用。",
@@ -719,6 +726,25 @@ public class BotApp {
                 String url = args.has("url") ? args.get("url").getAsString() : "";
                 return webReader.summarize(url, ai, ToolCenter.currentUserId());
             }));
+
+        // ---- 联网搜索（条件：API Key 已配置）----
+        if (search != null) {
+            toolCenter.register(new ToolDefinition("web_search",
+                "联网搜索互联网获取实时信息。" +
+                "当用户询问的问题超出已有工具（天气/新闻/足球/股票/计算器/快递/饮食等）的覆盖范围时调用此工具。" +
+                "例如：最近发生的新闻事件、名人动态、产品价格、学术知识、百科查询等。" +
+                "搜索结果为 Google 实时结果，包含标题、摘要和链接。" +
+                "**优先级**：如果能用 get_news、get_weather、query_stock 等专用工具满足需求，优先使用专用工具。",
+                Map.of(
+                    "query", Map.of("type", "string", "description", "搜索关键词，用中文或英文"),
+                    "num", Map.of("type", "integer", "description", "返回结果数，默认5，最多10")
+                ),
+                args -> {
+                    String query = args.has("query") ? args.get("query").getAsString() : "";
+                    int num = args.has("num") ? args.get("num").getAsInt() : 5;
+                    return search.search(query, num);
+                }));
+        }
     }
 
     /** 快捷构建 FunctionDefinition */
