@@ -33,7 +33,6 @@ import java.util.HashMap;
  */
 public class BotApp {
 
-    private static final DateTimeService dateTime = new DateTimeServiceImpl();
     /** 默认人设 */
     private static final String DEFAULT_PERSONA = "你是一个友好的微信AI助手。";
     /** 技术指令（不随人设变化，始终追加） */
@@ -59,7 +58,9 @@ public class BotApp {
     /** 上一份文档缓存 — 支持追问 */
     private static final Map<String, CachedDoc> LAST_DOC = new HashMap<>();
     /** 上一次新闻查询缓存 — 支持追问 */
-    private static final Map<String, CachedNews> LAST_NEWS = new HashMap<>(); // 5 分钟
+    private static final Map<String, CachedNews> LAST_NEWS = new HashMap<>();
+    /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
+    private static final DateTimeService dateTime = new DateTimeServiceImpl(); // 5 分钟
 
     private static class CachedImage {
         final byte[] bytes;
@@ -95,17 +96,7 @@ public class BotApp {
         boolean expired() { return System.currentTimeMillis() - timestamp > IMAGE_CACHE_TTL_MS; }
     }
 
-    /** 图片追问关键词 — 仅匹配明显指向图片的说法（已废弃，FC 工具自动判断） */
-    @Deprecated
-    private static final String[] IMAGE_FOLLOWUP_KEYWORDS = {
-        "照片", "图片", "这张", "那张", "图中", "图里", "这图", "那个图", "这里面", "图上"
-    };
-    /** 文档追问关键词（已废弃，FC 工具自动判断） */
-    @Deprecated
 
-    private static final String[] DOC_FOLLOWUP_KEYWORDS = {
-        "文档", "文件", "这份", "那份", "刚才的文档", "刚才的文件", "总结的"
-    };
 
     // 语音回复关键词 — 无需 AI 确认，关键词命中即生效
     private static final String[] VOICE_REPLY_KEYWORDS = {
@@ -417,7 +408,7 @@ public class BotApp {
             Map.of()));
         executors.put("list_sessions", args -> sm.listSessions(userId));
 
-            // --- 图片追问（条件：有缓存图片 + 识图服务可用）---
+        // --- 图片追问（条件：有缓存图片 + 识图服务可用）---
         CachedImage cachedImg = LAST_IMAGE.get(userId);
         if (cachedImg != null && !cachedImg.expired() && vision != null) {
             tools.add(functionDef("ask_about_image",
