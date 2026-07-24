@@ -35,6 +35,8 @@ import org.example.bot.impl.BotState;
 import org.example.bot.service.MusicService;
 import org.example.bot.impl.MusicServiceImpl;
 import org.example.bot.impl.DateTimeServiceImpl;
+import org.example.bot.service.IdiomService;
+import org.example.bot.impl.IdiomServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
@@ -153,8 +155,11 @@ public class BotApp {
         try { search = new WebSearchServiceImpl(); }
         catch (IllegalStateException e) { System.out.println("[Bot] ⚠ 联网搜索服务未启用: " + e.getMessage()); }
 
+        IdiomService idiom = new IdiomServiceImpl();
+        System.out.println("[Bot] 🎯 成语接龙服务已就绪");
+
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -172,6 +177,7 @@ public class BotApp {
         final FinanceService fFinance = finance;
         final WebReaderService fWebReader = webReader;
         final WebSearchService fSearch = search;
+        final IdiomService fIdiom = idiom;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -398,7 +404,8 @@ public class BotApp {
             FootballService football, DietService diet,
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
-            WebReaderService webReader, WebSearchService search) {
+            WebReaderService webReader, WebSearchService search,
+            IdiomService idiom) {
 
         BotState bs = botState(ai);
 
@@ -773,6 +780,23 @@ public class BotApp {
                     return search.search(query, num);
                 }));
         }
+
+        // ---- 成语接龙 ----
+        toolCenter.register(new ToolDefinition("idiom_chain",
+            "成语接龙游戏。当用户说「成语接龙」「来玩成语接龙」「开始接龙」等启动游戏时调用。" +
+            "当用户说出一个成语接龙时也调用此工具，由服务端判断是接龙还是其他操作。" +
+            "规则：接的成语首字必须与上一个成语的尾字相同，不能重复，必须是四字成语。" +
+            "用户可以说「认输」「放弃」「换一个」来跳过。",
+            Map.of(
+                "idiom", Map.of("type", "string", "description", "玩家说的成语（四字），如果说「开始」「成语接龙」等则传空字符串启动游戏")
+            ),
+            args -> {
+                String idiom = args.has("idiom") ? args.get("idiom").getAsString() : "";
+                if (idiom.isBlank()) {
+                    return idiom.startGame(ToolCenter.currentUserId());
+                }
+                return idiom.play(ToolCenter.currentUserId(), idiom);
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */
