@@ -103,16 +103,60 @@ public class ILinkBot {
                         }
                     }
                 } catch (IOException e) {
-                    System.err.println("[iLink] ⚠ getUpdates 异常: " + e.getMessage());
+                    String msg = e.getMessage() != null ? e.getMessage() : "";
+                    System.err.println("[iLink] ⚠ getUpdates 异常: " + msg);
+                    if (msg.contains("expired") || msg.contains("过期") || msg.contains("SessionExpired")) {
+                        System.out.println("[iLink] 🔐 会话过期，尝试重新登录...");
+                        if (tryRelogin()) {
+                            System.out.println("[iLink] ✅ 重新登录成功，继续轮询");
+                            continue;
+                        } else {
+                            System.err.println("[iLink] ❌ 重新登录失败，5秒后重试...");
+                        }
+                    }
                     try { Thread.sleep(1000); } catch (InterruptedException ignored) { break; }
                 } catch (Exception e) {
-                    System.err.println("[iLink] ⚠ 轮询异常: " + e.getMessage());
+                    String msg = e.getMessage() != null ? e.getMessage() : "";
+                    System.err.println("[iLink] ⚠ 轮询异常: " + msg);
+                    if (msg.contains("expired") || msg.contains("过期") || msg.contains("SessionExpired")) {
+                        System.out.println("[iLink] 🔐 会话过期，尝试重新登录...");
+                        if (tryRelogin()) {
+                            System.out.println("[iLink] ✅ 重新登录成功，继续轮询");
+                            continue;
+                        }
+                    }
+                    try { Thread.sleep(5000); } catch (InterruptedException ignored) { break; }
                 }
             }
             System.out.println("[iLink] 🔄 长轮询已停止");
         }, "ilink-poller");
         poller.setDaemon(true);
         poller.start();
+    }
+
+    /** 尝试重新登录，成功返回 true */
+    private boolean tryRelogin() {
+        for (int attempt = 1; attempt <= 5; attempt++) {
+            System.out.println("[iLink] 重新登录...（第 " + attempt + " 次）");
+            String qrContent = client.executeLogin();
+            System.out.println(qrContent);
+            try {
+                this.loginContext = client.getLoginFuture().get();
+                System.out.println("[iLink] ✅ 重新登录成功！Bot ID: " + loginContext.getBotId());
+                return true;
+            } catch (Exception e) {
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                String msg = (cause.getMessage() != null ? cause.getMessage() : "")
+                    + (e.getMessage() != null ? e.getMessage() : "");
+                if (msg.contains("expired") || msg.contains("过期")) {
+                    System.out.println("[iLink] ⚠ 二维码过期，重试...");
+                } else {
+                    System.err.println("[iLink] ❌ 重新登录失败: " + msg);
+                    return false;
+                }
+            }
+        }
+        return false;
     }
 
     // ---- 发送 ----
