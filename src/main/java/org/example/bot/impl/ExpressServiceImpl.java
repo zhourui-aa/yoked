@@ -1,4 +1,7 @@
-package org.example.bot.util;
+package org.example.bot.impl;
+
+import org.example.bot.service.ExpressService;
+import org.example.bot.util.ConfigUtil;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -20,7 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 快递查询工具类 — 基于快递鸟 API。
+ * 快递查询服务实现 — 基于快递鸟 API。
  *
  * <p>配置项：
  * <ul>
@@ -29,7 +32,7 @@ import java.util.Map;
  *   <li>{@code kdniao.request.type} / {@code KDNIAO_REQUEST_TYPE} — 查询指令，默认 8001</li>
  * </ul>
  */
-public final class ExpressUtil {
+public class ExpressServiceImpl implements ExpressService {
 
     private static final String API_URL = "https://api.kdniao.com/Ebusiness/EbusinessOrderHandle.aspx";
     private static final String REQUEST_TYPE_DETECT = "2002";
@@ -39,27 +42,27 @@ public final class ExpressUtil {
     private static final Map<String, String> COMPANY_ALIASES = buildCompanyAliases();
     private static final Map<String, String> COMPANY_NAMES = buildCompanyNames();
 
-    private ExpressUtil() {}
+    private final String ebusinessId;
+    private final String appKey;
+    private final String requestType;
 
-    /**
-     * 查询快递物流（自动识别快递公司）
-     */
-    public static String query(String trackingNumber) {
-        return query(trackingNumber, null, null);
+    public ExpressServiceImpl() {
+        String eid = ConfigUtil.get("kdniao.ebusiness.id", "KDNIAO_EBUSINESS_ID");
+        String key = ConfigUtil.get("kdniao.app.key", "KDNIAO_APP_KEY");
+        if (eid == null || eid.isBlank() || key == null || key.isBlank()) {
+            throw new IllegalStateException(
+                    "未找到快递鸟 API 配置。请在 config.properties 中设置 kdniao.ebusiness.id 和 kdniao.app.key。\n"
+                    + "获取方式：https://www.kdniao.com/ 注册后获取。");
+        }
+        this.ebusinessId = eid.strip();
+        this.appKey = key.strip();
+        String rt = ConfigUtil.get("kdniao.request.type", "KDNIAO_REQUEST_TYPE");
+        this.requestType = (rt != null && !rt.isBlank()) ? rt.strip() : DEFAULT_REQUEST_TYPE;
+        System.out.println("[快递] 快递查询服务已就绪");
     }
 
-    /**
-     * 查询快递物流
-     *
-     * @param trackingNumber 快递单号
-     * @param company        快递公司名称或编码，可为空（自动识别）
-     * @param phone          收/寄件人手机号后四位，顺丰必填
-     */
-    public static String query(String trackingNumber, String company, String phone) {
-        if (!isConfigured()) {
-            return "快递查询服务未配置，请在 config.properties 中设置 kdniao.ebusiness.id 和 kdniao.app.key。";
-        }
-
+    @Override
+    public String query(String trackingNumber, String company, String phone) {
         String num = normalizeTrackingNumber(trackingNumber);
         if (num == null) {
             return "快递单号格式不正确，请提供 6~32 位字母或数字。";
@@ -102,25 +105,7 @@ public final class ExpressUtil {
         return null;
     }
 
-    private static boolean isConfigured() {
-        return getConfig("kdniao.ebusiness.id", "KDNIAO_EBUSINESS_ID") != null
-                && getConfig("kdniao.app.key", "KDNIAO_APP_KEY") != null;
-    }
-
-    private static String getConfig(String propertyKey, String envKey) {
-        String value = ConfigUtil.get(propertyKey, envKey);
-        if (value == null || value.isBlank() || value.startsWith("请在此填入")) {
-            return null;
-        }
-        return value.strip();
-    }
-
-    private static String getRequestType() {
-        String type = getConfig("kdniao.request.type", "KDNIAO_REQUEST_TYPE");
-        return type != null ? type : DEFAULT_REQUEST_TYPE;
-    }
-
-    private static String normalizeTrackingNumber(String trackingNumber) {
+    private String normalizeTrackingNumber(String trackingNumber) {
         if (trackingNumber == null) {
             return null;
         }
@@ -131,7 +116,7 @@ public final class ExpressUtil {
         return num;
     }
 
-    private static String autoDetectCompany(String num) throws Exception {
+    private String autoDetectCompany(String num) throws Exception {
         JsonObject request = new JsonObject();
         request.addProperty("LogisticCode", num);
         String json = invokeApi(REQUEST_TYPE_DETECT, request);
@@ -150,7 +135,7 @@ public final class ExpressUtil {
         return shippers.get(0).getAsJsonObject().get("ShipperCode").getAsString();
     }
 
-    private static String queryTrack(String shipperCode, String num, String phone) throws Exception {
+    private String queryTrack(String shipperCode, String num, String phone) throws Exception {
         JsonObject request = new JsonObject();
         request.addProperty("OrderCode", "");
         request.addProperty("ShipperCode", shipperCode);
@@ -160,12 +145,10 @@ public final class ExpressUtil {
         } else if ("SF".equals(shipperCode)) {
             request.addProperty("CustomerName", "");
         }
-        return invokeApi(getRequestType(), request);
+        return invokeApi(requestType, request);
     }
 
-    private static String invokeApi(String requestType, JsonObject requestData) throws Exception {
-        String ebusinessId = getConfig("kdniao.ebusiness.id", "KDNIAO_EBUSINESS_ID");
-        String appKey = getConfig("kdniao.app.key", "KDNIAO_APP_KEY");
+    private String invokeApi(String rt, JsonObject requestData) throws Exception {
         String requestJson = requestData.toString();
 
         byte[] md5 = MessageDigest.getInstance("MD5")
@@ -174,7 +157,7 @@ public final class ExpressUtil {
                 Base64.getEncoder().encodeToString(md5), StandardCharsets.UTF_8);
         String encodedRequestData = URLEncoder.encode(requestJson, StandardCharsets.UTF_8);
 
-        String body = "RequestType=" + URLEncoder.encode(requestType, StandardCharsets.UTF_8)
+        String body = "RequestType=" + URLEncoder.encode(rt, StandardCharsets.UTF_8)
                 + "&EBusinessID=" + URLEncoder.encode(ebusinessId, StandardCharsets.UTF_8)
                 + "&RequestData=" + encodedRequestData
                 + "&DataSign=" + dataSign
@@ -193,7 +176,7 @@ public final class ExpressUtil {
         return readResponse(conn);
     }
 
-    private static String formatResponse(String json, String shipperCode, String num) {
+    private String formatResponse(String json, String shipperCode, String num) {
         JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         boolean success = root.has("Success") && root.get("Success").getAsBoolean();
         String reason = root.has("Reason") && !root.get("Reason").isJsonNull()
@@ -272,6 +255,8 @@ public final class ExpressUtil {
             return sb.toString();
         }
     }
+
+    // ---- 快递公司映射 ----
 
     private static Map<String, String> buildCompanyAliases() {
         Map<String, String> map = new LinkedHashMap<>();

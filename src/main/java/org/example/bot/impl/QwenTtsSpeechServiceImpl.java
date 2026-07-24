@@ -4,9 +4,6 @@ import com.alibaba.dashscope.aigc.multimodalconversation.AudioParameters;
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalConversation;
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalConversationParam;
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalConversationResult;
-import com.alibaba.dashscope.common.DashScopeResult;
-import com.alibaba.dashscope.protocol.Protocol;
-import com.alibaba.dashscope.protocol.ServiceOption;
 import com.alibaba.dashscope.utils.Constants;
 import org.example.bot.service.SpeechService;
 import org.example.bot.util.ConfigUtil;
@@ -19,31 +16,29 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
 
+/**
+ * 阿里云百炼 Qwen TTS 语音合成 + 音色管理。
+ */
 public class QwenTtsSpeechServiceImpl implements SpeechService {
 
-    private static final String MODEL = "sambert-zhichu-v1";
+    private static final String MODEL = "qwen3-tts-flash";
     private static final Duration DOWNLOAD_TIMEOUT = Duration.ofSeconds(15);
 
     private final HttpClient httpClient;
-    private final String apiKey;
     private final Map<String, String> voiceLibrary = new LinkedHashMap<>();
     private String currentVoice = "Cherry";
 
     public QwenTtsSpeechServiceImpl() {
-        this.apiKey = ConfigUtil.get("dashscope.api.key", "DASHSCOPE_API_KEY");
+        String apiKey = ConfigUtil.get("dashscope.api.key", "DASHSCOPE_API_KEY");
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("未找到 DashScope API Key。请设置 DASHSCOPE_API_KEY。");
         }
-
-        // 关键：设置全局 API Key
         Constants.apiKey = apiKey.trim();
 
         this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(DOWNLOAD_TIMEOUT)
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
+                .connectTimeout(DOWNLOAD_TIMEOUT).followRedirects(HttpClient.Redirect.NORMAL).build();
 
-        // 注册音色...
+        // 注册预设音色
         voiceLibrary.put("Cherry", "温柔女声");
         voiceLibrary.put("Serena", "成熟女声");
         voiceLibrary.put("Sunny", "活泼女声");
@@ -64,36 +59,25 @@ public class QwenTtsSpeechServiceImpl implements SpeechService {
 
     @Override
     public byte[] textToSpeech(String text) {
-        try {
-            // 直接用 HTTP 调用 DashScope TTS API
-            String requestBody = String.format(
-                    "{\"model\":\"%s\",\"input\":{\"text\":\"%s\"},\"parameters\":{\"voice\":\"%s\"}}",
-                    MODEL, text.replace("\"", "\\\""), currentVoice
-            );
+        AudioParameters.Voice voice = parseVoice(currentVoice);
+        MultiModalConversationParam param = MultiModalConversationParam.builder()
+                .model(MODEL).text(text).voice(voice).build();
+        MultiModalConversation conv = new MultiModalConversation();
+        MultiModalConversationResult result;
+        try { result = conv.call(param); }
+        catch (Exception e) { throw new RuntimeException("TTS 失败: " + e.getMessage(), e); }
 
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create("https://dashscope.aliyuncs.com/api/v1/services/audio/tts/sync"))
-                    .header("Authorization", "Bearer " + apiKey)
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                    .timeout(Duration.ofSeconds(30))
-                    .build();
+        if (result.getStatusCode() != null && result.getStatusCode() != 200)
+            throw new RuntimeException("TTS API 错误: " + result.getCode());
 
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            if (response.statusCode() != 200) {
-                throw new RuntimeException("TTS API 错误: " + response.body());
-            }
-
-            // 解析 JSON 获取音频 URL 或 base64
-            com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(response.body()).getAsJsonObject();
-            String audioUrl = json.getAsJsonObject("output").get("audio_url").getAsString();
-
-            return downloadAudio(audioUrl);
-
-        } catch (Exception e) {
-            throw new RuntimeException("TTS 失败: " + e.getMessage(), e);
+        String url = result.getOutput().getAudio().getUrl();
+        if (url == null || url.isBlank()) {
+            String data = result.getOutput().getAudio().getData();
+            if (data != null && !data.isBlank()) return java.util.Base64.getDecoder().decode(data);
+            throw new RuntimeException("TTS 未返回音频");
         }
+        try { return downloadAudio(url); }
+        catch (Exception e) { throw new RuntimeException("下载音频失败: " + e.getMessage(), e); }
     }
 
     @Override
@@ -106,10 +90,7 @@ public class QwenTtsSpeechServiceImpl implements SpeechService {
         }
     }
 
-    @Override
-    public String getCurrentVoice() {
-        return currentVoice;
-    }
+    @Override public String getCurrentVoice() { return currentVoice; }
 
     @Override
     public String listVoices() {
