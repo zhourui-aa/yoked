@@ -13,6 +13,8 @@ import org.example.bot.impl.QwenTtsSpeechServiceImpl;
 import org.example.bot.impl.SeedreamImageServiceImpl;
 import org.example.bot.impl.FootballServiceImpl;
 import org.example.bot.service.FootballService;
+import org.example.bot.impl.DietServiceImpl;
+import org.example.bot.service.DietService;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -132,11 +134,16 @@ public class BotApp {
         try { football = new FootballServiceImpl(); }
         catch (Exception e) { System.out.println("[Bot] ⚠ 足球服务未启用: " + e.getMessage()); }
 
+        DietService diet = null;
+        try { diet = new DietServiceImpl(); }
+        catch (Exception e) { System.out.println("[Bot] ⚠ 饮食推荐服务未启用: " + e.getMessage()); }
+
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
         final VisionService fVision = vision;
         final SpeechService fTts = tts;
         final FootballService fFootball = football;
+        final DietService fDiet = diet;
         final AiService fAi = ai;
         final WeatherBotService fWeather = weather;
 
@@ -147,7 +154,7 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fFootball, fWeather, fVision, fImageGen, msg);
+                handleVoice(bot, fAi, fTts, fFootball, fDiet, fWeather, fVision, fImageGen, msg);
                 return;
             }
             if (msg.isImage()) {
@@ -163,7 +170,7 @@ public class BotApp {
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fFootball, fWeather, fVision, fImageGen,
+            processTextMessage(bot, fAi, fTts, fFootball, fDiet, fWeather, fVision, fImageGen,
                                userId, text, false);
         });
 
@@ -196,6 +203,7 @@ public class BotApp {
      */
     private static void processTextMessage(ILinkBot bot, AiService ai, SpeechService tts,
                                            FootballService football,
+                                           DietService diet,
                                            WeatherBotService weather, VisionService vision,
                                            ImageGenService imageGen,
                                            String userId, String text, boolean forceVoice) {
@@ -211,7 +219,7 @@ public class BotApp {
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors
             = new java.util.LinkedHashMap<>();
-        buildTools(tools, executors, bot, ai, football, weather, vision, imageGen, userId);
+        buildTools(tools, executors, bot, ai, football, diet, weather, vision, imageGen, userId);
 
         // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
@@ -299,6 +307,7 @@ public class BotApp {
             java.util.Map<String, java.util.function.Function<JsonObject, String>> executors,
             ILinkBot bot, AiService ai,
             FootballService football,
+            DietService diet,
             WeatherBotService weather, VisionService vision,
             ImageGenService imageGen, String userId) {
 
@@ -352,6 +361,25 @@ public class BotApp {
             executors.put("search_football_news", args -> {
                 String kw = args.has("keyword") ? args.get("keyword").getAsString() : "英超转会";
                 return football.searchNews(kw);
+            });
+        }
+
+        // --- 饮食推荐（如果服务可用）---
+        if (diet != null) {
+            tools.add(functionDef("get_diet_recommendation",
+                "根据用户的身高、体重、目标（减脂/增肌）生成个性化饮食推荐方案。" +
+                "当用户说「饮食推荐」「吃什么」「减肥怎么吃」「增肌饮食」「减脂餐」「健身饮食」等时调用。" +
+                "必须先从用户处获取身高(cm)、体重(kg)、目标这三个信息，缺一不可。如果用户没提供完整，请逐项询问。",
+                Map.of(
+                    "heightCm", Map.of("type", "integer", "description", "身高（厘米），必须由用户明确提供"),
+                    "weightKg", Map.of("type", "number", "description", "体重（公斤），必须由用户明确提供"),
+                    "goal", Map.of("type", "string", "description", "目标：减脂或增肌，必须由用户明确说明")
+                )));
+            executors.put("get_diet_recommendation", args -> {
+                int height = args.has("heightCm") ? args.get("heightCm").getAsInt() : 0;
+                double weight = args.has("weightKg") ? args.get("weightKg").getAsDouble() : 0;
+                String goal = args.has("goal") ? args.get("goal").getAsString() : "";
+                return diet.getRecommendation(height, weight, goal);
             });
         }
 
@@ -623,6 +651,7 @@ public class BotApp {
 
     private static void handleVoice(ILinkBot bot, AiService ai, SpeechService tts,
                                      FootballService football,
+                                     DietService diet,
                                      WeatherBotService weather, VisionService vision,
                                      ImageGenService imageGen, BotMessage msg) {
         String userId = msg.userId();
@@ -634,7 +663,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, football, weather, vision, imageGen, userId, text, true);
+        processTextMessage(bot, ai, tts, football, diet, weather, vision, imageGen, userId, text, true);
     }
 
     // ---- 工具方法 ----
