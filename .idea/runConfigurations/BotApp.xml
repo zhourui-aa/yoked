@@ -1,0 +1,16 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="BotApp" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="org.example.bot.BotApp" />
+    <module name="wechatTest1" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="org.example.bot.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

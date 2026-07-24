@@ -1,16 +1,10 @@
 package org.example.bot;
 
 import org.example.bot.ilink.ILinkBot;
+import org.example.bot.impl.*;
 import org.example.bot.model.BotMessage;
-import org.example.bot.service.AiService;
-import org.example.bot.service.ImageGenService;
-import org.example.bot.service.SpeechService;
-import org.example.bot.service.VisionService;
-import org.example.bot.service.WeatherBotService;
-import org.example.bot.impl.DeepSeekAiServiceImpl;
-import org.example.bot.impl.DoubaoVisionServiceImpl;
-import org.example.bot.impl.QwenTtsSpeechServiceImpl;
-import org.example.bot.impl.SeedreamImageServiceImpl;
+import org.example.bot.service.*;
+
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -44,6 +38,10 @@ public class BotApp {
     /** 技术指令（不随人设变化，始终追加） */
     private static final String TECH_INSTRUCTIONS =
         "你有语音回复能力，用户要求语音时你的文字会自动转语音，所以不要说你不能发语音。" +
+        "回复简洁自然，适合朗读。" +
+        "你可以查询天气、获取新闻、生成图片、识别图片、总结文件等。" +
+        "你可以同时调用多个工具或依次调用工具来满足用户的复杂需求，最终把所有结果整合在一起回复用户。" +
+        "当用户问新闻相关问题时，直接调用 get_news 工具获取真实新闻，不要说你没有联网功能。";
 
     /** 生图专用线程池 — 避免阻塞主消息循环 */
     private static final ExecutorService IMAGE_EXECUTOR =
@@ -58,6 +56,11 @@ public class BotApp {
     private static final long IMAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 
     /** 上一份文档缓存 — 支持追问 */
+    private static final Map<String, CachedDoc> LAST_DOC = new HashMap<>();
+    /** 上一次新闻查询缓存 — 支持追问 */
+    private static final Map<String, CachedNews> LAST_NEWS = new HashMap<>();
+    /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
+    private static final DateTimeService dateTime = new DateTimeServiceImpl(); // 5 分钟
 
     private static class CachedImage {
         final byte[] bytes;
@@ -82,17 +85,18 @@ public class BotApp {
         boolean expired() { return System.currentTimeMillis() - timestamp > IMAGE_CACHE_TTL_MS; }
     }
 
-    /** 图片追问关键词 — 仅匹配明显指向图片的说法（已废弃，FC 工具自动判断） */
-    @Deprecated
-    private static final String[] IMAGE_FOLLOWUP_KEYWORDS = {
-        "照片", "图片", "这张", "那张", "图中", "图里", "这图", "那个图", "这里面", "图上"
-    };
-    /** 文档追问关键词（已废弃，FC 工具自动判断） */
-    @Deprecated
+    /** 缓存的新闻条目列表 — 支持追问 */
+    private static class CachedNews {
+        final java.util.List<NewsService.NewsItem> items;
+        final long timestamp;
+        CachedNews(java.util.List<NewsService.NewsItem> items) {
+            this.items = items;
+            this.timestamp = System.currentTimeMillis();
+        }
+        boolean expired() { return System.currentTimeMillis() - timestamp > IMAGE_CACHE_TTL_MS; }
+    }
 
-    private static final String[] DOC_FOLLOWUP_KEYWORDS = {
-        "文档", "文件", "这份", "那份", "刚才的文档", "刚才的文件", "总结的"
-    };
+
 
     // 语音回复关键词 — 无需 AI 确认，关键词命中即生效
     private static final String[] VOICE_REPLY_KEYWORDS = {
@@ -124,6 +128,16 @@ public class BotApp {
         try { tts = new QwenTtsSpeechServiceImpl(); }
         catch (IllegalStateException e) { System.out.println("[Bot] ⚠ 语音合成服务未启用: " + e.getMessage()); }
 
+        NewsService news = new RssNewsServiceImpl();
+        System.out.println("[Bot] 📰 新闻服务已就绪");
+
+        FootballService football = null;
+        try { football = new FootballServiceImpl(); }
+        catch (Exception e) { System.out.println("[Bot] ⚠ 足球服务未启用: " + e.getMessage()); }
+
+        DietService diet = null;
+        try { diet = new DietServiceImpl(); }
+        catch (Exception e) { System.out.println("[Bot] ⚠ 饮食推荐服务未启用: " + e.getMessage()); }
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
@@ -131,6 +145,9 @@ public class BotApp {
         final SpeechService fTts = tts;
         final AiService fAi = ai;
         final WeatherBotService fWeather = weather;
+        final NewsService fNews = news;
+        final FootballService fFootball = football;
+        final DietService fDiet = diet;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         bot.setHandler(msg -> {
@@ -139,6 +156,7 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
+                handleVoice(bot, fAi, fTts, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, msg);
                 return;
             }
             if (msg.isImage()) {
@@ -154,6 +172,7 @@ public class BotApp {
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
+            processTextMessage(bot, fAi, fTts, fFootball, fDiet, fWeather, fVision, fImageGen, fNews,
                                userId, text, false);
         });
 
@@ -185,7 +204,9 @@ public class BotApp {
      * @param forceVoice {@code true} 表示这条消息来自语音输入，回复必须带语音
      */
     private static void processTextMessage(ILinkBot bot, AiService ai, SpeechService tts,
+                                           FootballService football, DietService diet,
                                            WeatherBotService weather, VisionService vision,
+                                           ImageGenService imageGen, NewsService news,
                                            String userId, String text, boolean forceVoice) {
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
@@ -199,6 +220,7 @@ public class BotApp {
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors
             = new java.util.LinkedHashMap<>();
+        buildTools(tools, executors, bot, ai, football, diet, weather, vision, imageGen, news, userId);
 
         // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
@@ -285,28 +307,125 @@ public class BotApp {
             java.util.List<FunctionDefinition> tools,
             java.util.Map<String, java.util.function.Function<JsonObject, String>> executors,
             ILinkBot bot, AiService ai,
+            FootballService football, DietService diet,
             WeatherBotService weather, VisionService vision,
+            ImageGenService imageGen, NewsService news, String userId) {
 
         // --- 天气查询（始终可用）---
         tools.add(functionDef("get_weather",
             "查询指定城市的实时天气信息，包括温度、体感温度、湿度、天气状况、风速风向。" +
-            "当用户询问天气、气温、会不会下雨、冷不冷、热不热、穿什么衣服等问题时调用此工具。",
+            "当用户询问天气、气温、会不会下雨、冷不冷、热不热、穿什么衣服等问题时调用此工具。" +
+            "注意：你可以同时调用多个工具来满足用户的复合需求，比如同时查询多个城市的天气。",
             Map.of("city", Map.of("type", "string", "description", "城市名称，例如：北京、上海、东京"))));
         executors.put("get_weather", args -> {
             String city = args.has("city") ? args.get("city").getAsString() : "";
             return weather != null ? weather.query(city) : "天气服务未配置";
         });
 
+        // --- 新闻获取（始终可用）---
+        tools.add(functionDef("get_news",
+            "获取最新新闻。当用户询问任何新闻、热点、时事、最新消息时调用此工具。" +
+            "即使用户问「你能查新闻吗」「有什么新闻」等关于新闻能力的问题，也调用此工具来展示实际新闻。" +
+            "类别可选：综合、国际、科技、财经、体育、文化、健康、教育。",
+            Map.of("category", Map.of("type", "string",
+                "description", "新闻类别。用户提到具体类别时传入，否则传「综合」。"))));
+        executors.put("get_news", args -> {
+            String category = "综合";
+            try { if (args.has("category") && !args.get("category").isJsonNull())
+                category = args.get("category").getAsString(); } catch (Exception ignored) {}
+            String result = news.getNews(category, 8);
+            LAST_NEWS.put(userId, new CachedNews(news.getLastResults()));
+            return result;
         });
 
+        // --- 新闻详情（条件：刚查过新闻）---
+        if (news.isAvailable()) {
+            tools.add(functionDef("read_news_article",
+                "用户想了解某条新闻的详细内容。用户说「第X条」「某标题详细说说」等时调用。" +
+                "传入新闻标题中的关键词即可，不要编造序号。工具只返回标题和摘要，没有全文。禁止编造正文。",
+                Map.of("query", Map.of("type", "string",
+                    "description", "新闻标题关键词，例如「女排」。不要传序号。"))));
+            executors.put("read_news_article", args -> {
+                String query = "";
+                try { if (args.has("query") && !args.get("query").isJsonNull())
+                    query = args.get("query").getAsString(); } catch (Exception ignored) {}
+                if (query.isBlank() && args.has("index") && !args.get("index").isJsonNull()) {
+                    try { return news.getArticleDetail(String.valueOf(args.get("index").getAsInt())); }
+                    catch (Exception ignored) {}
                 }
+                CachedNews cn = LAST_NEWS.get(userId);
+                if (cn == null || cn.expired()) return "请先查询新闻。";
+                return news.getArticleDetail(query);
+            });
+        }
+
+        // --- 英超足球数据（如果服务可用）---
+        if (football != null) {
+            tools.add(functionDef("get_premier_league_standings",
+                "查询英超积分榜排名。用户说「英超积分榜」「英超排名」「英超战绩」「现在谁第一」等时调用。",
+                Map.of("top", Map.of("type", "integer", "description", "返回前几名，填0或5表示前5名，填0表示全部20队"))));
+            executors.put("get_premier_league_standings", args -> {
+                int top = args.has("top") ? args.get("top").getAsInt() : 0;
+                return football.getStandings(top);
+            });
+
+            tools.add(functionDef("get_premier_league_matches",
+                "查询英超最近比赛结果或赛程。用户说「最近英超比赛」「英超战况」「英超结果」「英超赛程」等时调用。",
+                Map.of(
+                    "type", Map.of("type", "string", "description", "recent=最近已结束的比赛, upcoming=即将进行的比赛"),
+                    "count", Map.of("type", "integer", "description", "返回场次数，默认5")
+                )));
+            executors.put("get_premier_league_matches", args -> {
+                String type = args.has("type") ? args.get("type").getAsString() : "recent";
+                int count = args.has("count") ? args.get("count").getAsInt() : 5;
+                if ("upcoming".equals(type)) {
+                    return football.getUpcomingMatches(count);
+                } else {
+                    return football.getRecentMatches(count);
+                }
+            });
+
+            tools.add(functionDef("get_premier_league_matchday",
+                "查询英超指定轮次的比赛结果。用户说「第X轮」「Matchday X」等时调用。",
+                Map.of("matchday", Map.of("type", "string", "description", "轮次，如 Matchday 1、第5轮"))));
+            executors.put("get_premier_league_matchday", args -> {
+                String md = args.has("matchday") ? args.get("matchday").getAsString() : "";
+                return football.getMatchdayResults(md);
+            });
+
+            tools.add(functionDef("search_football_news",
+                "搜索懂球帝足球新闻、转会消息。用户说「转会消息」「最新转会」「XX队新闻」「足球新闻」等时调用。",
+                Map.of("keyword", Map.of("type", "string", "description", "搜索关键词，如：转会、英超、利物浦、曼联"))));
+            executors.put("search_football_news", args -> {
+                String kw = args.has("keyword") ? args.get("keyword").getAsString() : "英超转会";
+                return football.searchNews(kw);
+            });
+        }
+
+        // --- 饮食推荐（如果服务可用）---
+        if (diet != null) {
+            tools.add(functionDef("get_diet_recommendation",
+                "根据用户的身高、体重、目标（减脂/增肌）生成个性化饮食推荐方案。" +
+                "当用户说「饮食推荐」「吃什么」「减肥怎么吃」「增肌饮食」「减脂餐」「健身饮食」等时调用。" +
+                "必须先从用户处获取身高(cm)、体重(kg)、目标这三个信息，缺一不可。如果用户没提供完整，请逐项询问。",
+                Map.of(
+                    "heightCm", Map.of("type", "integer", "description", "身高（厘米），必须由用户明确提供"),
+                    "weightKg", Map.of("type", "number", "description", "体重（公斤），必须由用户明确提供"),
+                    "goal", Map.of("type", "string", "description", "目标：减脂或增肌，必须由用户明确说明")
+                )));
+            executors.put("get_diet_recommendation", args -> {
+                int height = args.has("heightCm") ? args.get("heightCm").getAsInt() : 0;
+                double weight = args.has("weightKg") ? args.get("weightKg").getAsDouble() : 0;
+                String goal = args.has("goal") ? args.get("goal").getAsString() : "";
+                return diet.getRecommendation(height, weight, goal);
             });
         }
 
         // --- 图片生成（如果服务可用）---
         if (imageGen != null) {
             tools.add(functionDef("generate_image",
-                "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。",
+                "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。" +
+                 "你可以在查询天气之后调用此工具，根据天气信息生成对应的天气氛围图。",
                 Map.of("prompt", Map.of("type", "string", "description", "图片的详细描述，例如：一只在屋顶看星星的橘猫"))));
             executors.put("generate_image", args -> {
                 String prompt = args.has("prompt") ? args.get("prompt").getAsString() : "";
@@ -379,6 +498,17 @@ public class BotApp {
                 }
             });
         }
+
+        // --- 日期时间查询（始终可用）---
+        tools.add(functionDef("get_datetime",
+                "查询指定城市或时区的当前日期时间。当用户问「现在几点」「当地时间」「东京现在几点」「纽约时间」等问题时调用。" +
+                "注意：你可以同时调用多个工具来满足用户的复合需求，比如查完天气再查时间。",
+                Map.of("timezone", Map.of("type", "string", "description",
+                        "时区或城市名称，例如：Asia/Shanghai、纽约、东京、洛杉矶、伦敦"))));
+        executors.put("get_datetime", args -> {
+            String tz = args.has("timezone") ? args.get("timezone").getAsString() : "Asia/Shanghai";
+            return dateTime.query(tz);
+        });
 
         // --- 文档追问（条件：有缓存文档）---
         CachedDoc cachedDoc = LAST_DOC.get(userId);
@@ -570,7 +700,10 @@ public class BotApp {
     // ---- 语音消息（提取文字 → 统一路由 → 强制语音回复）----
 
     private static void handleVoice(ILinkBot bot, AiService ai, SpeechService tts,
+                                     FootballService football, DietService diet,
                                      WeatherBotService weather, VisionService vision,
+                                     ImageGenService imageGen, NewsService news,
+                                     BotMessage msg) {
         String userId = msg.userId();
         String text = msg.voiceText();
         if (text == null || text.isBlank()) {
@@ -580,6 +713,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
+        processTextMessage(bot, ai, tts, football, diet, weather, vision, imageGen, news, userId, text, true);
     }
 
     // ---- 工具方法 ----
