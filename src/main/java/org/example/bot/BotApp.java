@@ -11,7 +11,8 @@ import org.example.bot.impl.DeepSeekAiServiceImpl;
 import org.example.bot.impl.DoubaoVisionServiceImpl;
 import org.example.bot.impl.QwenTtsSpeechServiceImpl;
 import org.example.bot.impl.SeedreamImageServiceImpl;
-import org.example.bot.util.CalculatorUtil;
+import org.example.bot.impl.CalculatorServiceImpl;
+import org.example.bot.service.CalculatorService;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -127,12 +128,15 @@ public class BotApp {
         try { tts = new QwenTtsSpeechServiceImpl(); }
         catch (IllegalStateException e) { System.out.println("[Bot] ⚠ 语音合成服务未启用: " + e.getMessage()); }
 
+        CalculatorService calc = new CalculatorServiceImpl();
+
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
         final VisionService fVision = vision;
         final SpeechService fTts = tts;
         final AiService fAi = ai;
         final WeatherBotService fWeather = weather;
+        final CalculatorService fCalc = calc;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         bot.setHandler(msg -> {
@@ -141,7 +145,7 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fWeather, fVision, fImageGen, msg);
+                handleVoice(bot, fAi, fTts, fCalc, fWeather, fVision, fImageGen, msg);
                 return;
             }
             if (msg.isImage()) {
@@ -157,7 +161,7 @@ public class BotApp {
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fWeather, fVision, fImageGen,
+            processTextMessage(bot, fAi, fTts, fCalc, fWeather, fVision, fImageGen,
                                userId, text, false);
         });
 
@@ -189,6 +193,7 @@ public class BotApp {
      * @param forceVoice {@code true} 表示这条消息来自语音输入，回复必须带语音
      */
     private static void processTextMessage(ILinkBot bot, AiService ai, SpeechService tts,
+                                           CalculatorService calc,
                                            WeatherBotService weather, VisionService vision,
                                            ImageGenService imageGen,
                                            String userId, String text, boolean forceVoice) {
@@ -204,7 +209,7 @@ public class BotApp {
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors
             = new java.util.LinkedHashMap<>();
-        buildTools(tools, executors, bot, ai, weather, vision, imageGen, userId);
+        buildTools(tools, executors, bot, ai, calc, weather, vision, imageGen, userId);
 
         // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
@@ -291,6 +296,7 @@ public class BotApp {
             java.util.List<FunctionDefinition> tools,
             java.util.Map<String, java.util.function.Function<JsonObject, String>> executors,
             ILinkBot bot, AiService ai,
+            CalculatorService calc,
             WeatherBotService weather, VisionService vision,
             ImageGenService imageGen, String userId) {
 
@@ -305,12 +311,73 @@ public class BotApp {
         });
 
         // --- 金融计算器（始终可用）---
-        tools.add(functionDef("financial_calculator",
-                CalculatorTool.DESCRIPTION,
-                CalculatorTool.getParametersSchema()));
-        executors.put("financial_calculator", args -> new CalculatorTool().execute(args));
+        // 复利计算
+        tools.add(functionDef("calculate_compound_interest",
+            "计算复利终值。当用户询问复利、投资回报、利滚利等问题时调用。" +
+            "需要本金、年利率、年限，可选每年复利次数（默认1）。",
+            Map.of(
+                "principal", Map.of("type", "number", "description", "本金金额（元）"),
+                "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 5 表示 5%）"),
+                "years", Map.of("type", "integer", "description", "投资年限"),
+                "times_per_year", Map.of("type", "integer", "description", "每年复利次数，默认 1，按月复利填 12")
+            )));
+        executors.put("calculate_compound_interest", args -> {
+            double p = args.has("principal") ? args.get("principal").getAsDouble() : 0;
+            double r = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int y = args.has("years") ? args.get("years").getAsInt() : 1;
+            int t = args.has("times_per_year") ? args.get("times_per_year").getAsInt() : 1;
+            return calc.compoundInterest(p, r, y, t);
+        });
 
-        // --- 图片生成（如果服务可用）---
+        // 房贷计算
+        tools.add(functionDef("calculate_mortgage",
+            "计算房贷月供（等额本息或等额本金）。当用户询问房贷、月供、贷款还款时调用。" +
+            "需要贷款总额、年利率、年限。",
+            Map.of(
+                "loan_amount", Map.of("type", "number", "description", "贷款总额（元）"),
+                "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 4.9 表示 4.9%）"),
+                "years", Map.of("type", "integer", "description", "贷款年限"),
+                "method", Map.of("type", "string", "description", "还款方式：equal_interest（等额本息，默认）、equal_principal（等额本金）")
+            )));
+        executors.put("calculate_mortgage", args -> {
+            double loan = args.has("loan_amount") ? args.get("loan_amount").getAsDouble() : 0;
+            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
+            int years = args.has("years") ? args.get("years").getAsInt() : 0;
+            String method = args.has("method") ? args.get("method").getAsString() : "equal_interest";
+            return calc.mortgage(loan, rate, years, method);
+        });
+
+        // 个税计算
+        tools.add(functionDef("calculate_tax",
+            "计算个人所得税及税后收入（2024年累进税率表）。当用户询问个税、所得税、扣税、税后工资时调用。" +
+            "需要税前月薪，可选五险一金金额和专项附加扣除。",
+            Map.of(
+                "monthly_salary", Map.of("type", "number", "description", "税前月薪（元）"),
+                "social_insurance", Map.of("type", "number", "description", "五险一金金额，填0则按10.5%估算"),
+                "special_deduction", Map.of("type", "number", "description", "专项附加扣除金额，默认0")
+            )));
+        executors.put("calculate_tax", args -> {
+            double salary = args.has("monthly_salary") ? args.get("monthly_salary").getAsDouble() : 0;
+            double insurance = args.has("social_insurance") ? args.get("social_insurance").getAsDouble() : 0;
+            double deduction = args.has("special_deduction") ? args.get("special_deduction").getAsDouble() : 0;
+            return calc.calculateTax(salary, insurance, deduction);
+        });
+
+        // 汇率转换
+        tools.add(functionDef("convert_currency",
+            "实时汇率转换。当用户询问汇率、货币换算、兑换时调用。" +
+            "需要金额、源货币代码、目标货币代码。",
+            Map.of(
+                "amount", Map.of("type", "number", "description", "金额"),
+                "from_currency", Map.of("type", "string", "description", "源货币代码，如 USD、CNY、EUR、JPY"),
+                "to_currency", Map.of("type", "string", "description", "目标货币代码，如 USD、CNY、EUR、JPY")
+            )));
+        executors.put("convert_currency", args -> {
+            double amount = args.has("amount") ? args.get("amount").getAsDouble() : 0;
+            String from = args.has("from_currency") ? args.get("from_currency").getAsString() : "";
+            String to = args.has("to_currency") ? args.get("to_currency").getAsString() : "";
+            return calc.convertCurrency(amount, from, to);
+        });
         if (imageGen != null) {
             tools.add(functionDef("generate_image",
                 "根据文字描述生成一张图片。当用户说「画」「生成」「来一张」「做一张」「帮我画」等时调用。",
@@ -401,78 +468,6 @@ public class BotApp {
                     + "\n\n用户追问：" + question + "\n请根据文件内容回答。";
             });
         }
-        // ========== 计算器工具 ==========
-// 复利计算
-        tools.add(functionDef("calculate_compound_interest",
-                "计算复利终值。当用户询问复利、投资回报、利滚利等问题时调用。",
-                Map.of(
-                        "principal", Map.of("type", "number", "description", "本金金额"),
-                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 5 表示 5%）"),
-                        "years", Map.of("type", "integer", "description", "投资年限（整数）"),
-                        "times_per_year", Map.of("type", "integer", "description", "每年复利次数，默认 1")
-                )));
-        executors.put("calculate_compound_interest", args -> {
-            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
-            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
-            int years = args.has("years") ? args.get("years").getAsInt() : 1;
-            int times = args.has("times_per_year") ? args.get("times_per_year").getAsInt() : 1;
-            if (principal <= 0 || rate <= 0 || years <= 0) {
-                return "参数不合法，请提供正确的本金、年利率和年限。";
-            }
-            return CalculatorUtil.compoundInterest(principal, rate, years, times);
-        });
-
-// 房贷计算
-        tools.add(functionDef("calculate_mortgage",
-                "计算等额本息房贷的月供。当用户询问房贷、月供、贷款还款时调用。",
-                Map.of(
-                        "principal", Map.of("type", "number", "description", "贷款总额（单位：元）"),
-                        "annual_rate", Map.of("type", "number", "description", "年利率（百分比，如 4.9 表示 4.9%）"),
-                        "years", Map.of("type", "integer", "description", "贷款年限（整数）")
-                )));
-        executors.put("calculate_mortgage", args -> {
-            double principal = args.has("principal") ? args.get("principal").getAsDouble() : 0;
-            double rate = args.has("annual_rate") ? args.get("annual_rate").getAsDouble() : 0;
-            int years = args.has("years") ? args.get("years").getAsInt() : 0;
-            if (principal <= 0 || rate <= 0 || years <= 0) {
-                return "参数不合法，请提供正确的贷款总额、年利率和年限。";
-            }
-            return CalculatorUtil.mortgagePayment(principal, rate, years);
-        });
-
-// 税率计算
-        tools.add(functionDef("calculate_tax",
-                "计算税额及税后收入。当用户询问税费、所得税、扣税时调用。",
-                Map.of(
-                        "income", Map.of("type", "number", "description", "税前收入金额"),
-                        "rate", Map.of("type", "number", "description", "税率（百分比，如 20 表示 20%）")
-                )));
-        executors.put("calculate_tax", args -> {
-            double income = args.has("income") ? args.get("income").getAsDouble() : 0;
-            double rate = args.has("rate") ? args.get("rate").getAsDouble() : 0;
-            if (income <= 0 || rate <= 0) {
-                return "参数不合法，请提供正确的收入和税率。";
-            }
-            return CalculatorUtil.calculateTax(income, rate);
-        });
-
-// 汇率转换
-        tools.add(functionDef("convert_currency",
-                "实时汇率转换。当用户询问汇率、货币换算、兑换等时调用。",
-                Map.of(
-                        "amount", Map.of("type", "number", "description", "金额"),
-                        "from_currency", Map.of("type", "string", "description", "源货币代码，如 USD、CNY、EUR"),
-                        "to_currency", Map.of("type", "string", "description", "目标货币代码，如 USD、CNY、EUR")
-                )));
-        executors.put("convert_currency", args -> {
-            double amount = args.has("amount") ? args.get("amount").getAsDouble() : 0;
-            String from = args.has("from_currency") ? args.get("from_currency").getAsString() : "";
-            String to = args.has("to_currency") ? args.get("to_currency").getAsString() : "";
-            if (amount <= 0 || from.isBlank() || to.isBlank()) {
-                return "参数不合法，请提供金额和货币代码。";
-            }
-            return CalculatorUtil.convertCurrency(amount, from, to);
-        });
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -649,6 +644,7 @@ public class BotApp {
     // ---- 语音消息（提取文字 → 统一路由 → 强制语音回复）----
 
     private static void handleVoice(ILinkBot bot, AiService ai, SpeechService tts,
+                                     CalculatorService calc,
                                      WeatherBotService weather, VisionService vision,
                                      ImageGenService imageGen, BotMessage msg) {
         String userId = msg.userId();
@@ -660,7 +656,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, weather, vision, imageGen, userId, text, true);
+        processTextMessage(bot, ai, tts, calc, weather, vision, imageGen, userId, text, true);
     }
 
     // ---- 工具方法 ----
