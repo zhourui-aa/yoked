@@ -32,6 +32,8 @@ import org.example.bot.impl.RssNewsServiceImpl;
 import org.example.bot.impl.FootballServiceImpl;
 import org.example.bot.impl.DietServiceImpl;
 import org.example.bot.impl.BotState;
+import org.example.bot.service.MusicService;
+import org.example.bot.impl.MusicServiceImpl;
 import org.example.bot.impl.DateTimeServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
@@ -83,6 +85,7 @@ public class BotApp {
 
     /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
     private static final DateTimeService dateTime = new DateTimeServiceImpl();
+    private static final MusicService music = new MusicServiceImpl();
     /** 工具中心 — 统一管理所有 FC 工具定义、注册和条件评估 */
     private static final ToolCenter toolCenter = new ToolCenter();
     /** Bot 集群 — 支持多微信号同时在线，运行时可通过命令动态新建 */
@@ -355,6 +358,31 @@ public class BotApp {
             ImageGenService imageGen, NewsService news,
             FinanceService finance, WebReaderService webReader, String userId) {
         toolCenter.buildTools(tools, executors, userId);
+
+        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的访问）---
+        tools.add(functionDef("play_music",
+            "搜索并播放歌曲试听。当用户说「我想听」「放一首」「来一首」「唱一首」「播放」等时调用。",
+            Map.of(
+                "song", Map.of("type", "string", "description", "歌曲名称，例如：七里香、孤勇者"),
+                "artist", Map.of("type", "string", "description", "歌手名称（可选），例如：周杰伦")
+            )));
+        executors.put("play_music", args -> {
+            String song = args.has("song") ? args.get("song").getAsString() : "";
+            String artist = args.has("artist") ? args.get("artist").getAsString() : "";
+            String result = music.search(song, artist);
+            if (result.contains("音频URL:")) {
+                String rawUrl = result.substring(result.indexOf("音频URL:") + 7).trim();
+                final String audioUrl = rawUrl.substring(0,
+                    rawUrl.indexOf("\n") > 0 ? rawUrl.indexOf("\n") : rawUrl.length()).trim();
+                IMAGE_EXECUTOR.submit(() -> {
+                    try {
+                        byte[] data = ((MusicServiceImpl) music).downloadSong(audioUrl);
+                        bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
+                    } catch (Exception ignored) {}
+                });
+            }
+            return result;
+        });
     }
 
     // ============================================================
