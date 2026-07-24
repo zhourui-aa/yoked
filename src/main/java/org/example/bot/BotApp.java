@@ -13,6 +13,8 @@ import org.example.bot.impl.QwenTtsSpeechServiceImpl;
 import org.example.bot.impl.SeedreamImageServiceImpl;
 import org.example.bot.impl.CalculatorServiceImpl;
 import org.example.bot.service.CalculatorService;
+import org.example.bot.util.ExpressUtil;
+import org.example.bot.util.RandomUtil;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -468,6 +470,72 @@ public class BotApp {
                     + "\n\n用户追问：" + question + "\n请根据文件内容回答。";
             });
         }
+
+        // ========== 随机工具 ==========
+        tools.add(functionDef("roll_dice",
+                "掷骰子。当用户说掷骰、投骰、roll dice、来颗骰子等问题时调用。",
+                Map.of(
+                        "count", Map.of("type", "integer", "description", "骰子个数，默认 1"),
+                        "sides", Map.of("type", "integer", "description", "每个骰子的面数，默认 6")
+                )));
+        executors.put("roll_dice", args -> {
+            int count = args.has("count") ? args.get("count").getAsInt() : 1;
+            int sides = args.has("sides") ? args.get("sides").getAsInt() : 6;
+            return RandomUtil.rollDice(count, sides);
+        });
+
+        tools.add(functionDef("random_number",
+                "生成指定范围内的随机整数。当用户要随机数、摇号、抽号码时调用。",
+                Map.of(
+                        "min", Map.of("type", "integer", "description", "最小值（含）"),
+                        "max", Map.of("type", "integer", "description", "最大值（含）")
+                )));
+        executors.put("random_number", args -> {
+            if (!args.has("min") || !args.has("max")) {
+                return "请提供 min 和 max 参数。";
+            }
+            return RandomUtil.randomInt(args.get("min").getAsInt(), args.get("max").getAsInt());
+        });
+
+        tools.add(functionDef("random_choice",
+                "从多个选项中随机抽取一个。当用户说帮我选、抽签、随机决定、今晚吃什么等问题时调用。",
+                Map.of("options", Map.of(
+                        "type", "array",
+                        "items", Map.of("type", "string"),
+                        "description", "选项列表，例如：[\"火锅\", \"烧烤\", \"寿司\"]"))));
+        executors.put("random_choice", args -> {
+            if (!args.has("options") || !args.get("options").isJsonArray()) {
+                return "请提供 options 数组，例如 [\"A\", \"B\", \"C\"]。";
+            }
+            var arr = args.get("options").getAsJsonArray();
+            java.util.List<String> options = new java.util.ArrayList<>();
+            arr.forEach(el -> options.add(el.getAsString()));
+            return RandomUtil.randomChoice(options);
+        });
+
+        tools.add(functionDef("flip_coin",
+                "抛硬币。当用户说抛硬币、正反面、猜正反等问题时调用。",
+                Map.of()));
+        executors.put("flip_coin", args -> RandomUtil.flipCoin());
+
+        // ========== 快递查询 ==========
+        tools.add(functionDef("track_express",
+                "查询快递物流轨迹。当用户询问快递、物流、包裹、单号到哪里了、查快递等问题时调用。",
+                Map.of(
+                        "tracking_number", Map.of("type", "string", "description", "快递单号"),
+                        "company", Map.of("type", "string", "description", "快递公司，可选，如顺丰、圆通、中通。不提供则自动识别"),
+                        "phone", Map.of("type", "string", "description", "手机号后四位，查询顺丰快递时必填")
+                )));
+        executors.put("track_express", args -> {
+            String trackingNumber = args.has("tracking_number")
+                    ? args.get("tracking_number").getAsString() : "";
+            String company = args.has("company") ? args.get("company").getAsString() : null;
+            String phone = args.has("phone") ? args.get("phone").getAsString() : null;
+            if (trackingNumber.isBlank()) {
+                return "请提供快递单号。";
+            }
+            return ExpressUtil.query(trackingNumber, company, phone);
+        });
     }
 
     /** 快捷构建 FunctionDefinition */
