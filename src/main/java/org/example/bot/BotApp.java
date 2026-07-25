@@ -37,6 +37,8 @@ import org.example.bot.impl.MusicServiceImpl;
 import org.example.bot.impl.DateTimeServiceImpl;
 import org.example.bot.service.IdiomService;
 import org.example.bot.impl.IdiomServiceImpl;
+import org.example.bot.service.GarbageService;
+import org.example.bot.impl.GarbageServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
@@ -158,8 +160,11 @@ public class BotApp {
         IdiomService idiom = new IdiomServiceImpl();
         System.out.println("[Bot] 🎯 成语接龙服务已就绪");
 
+        GarbageService garbage = new GarbageServiceImpl();
+        System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
+
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -178,6 +183,7 @@ public class BotApp {
         final WebReaderService fWebReader = webReader;
         final WebSearchService fSearch = search;
         final IdiomService fIdiom = idiom;
+        final GarbageService fGarbage = garbage;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -405,7 +411,7 @@ public class BotApp {
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
             WebReaderService webReader, WebSearchService search,
-            IdiomService idiom) {
+            IdiomService idiom, GarbageService garbage) {
 
         BotState bs = botState(ai);
 
@@ -796,6 +802,19 @@ public class BotApp {
                     return idiom.startGame(ToolCenter.currentUserId());
                 }
                 return idiom.play(ToolCenter.currentUserId(), idiom);
+            }));
+
+        // ---- 垃圾分类查询 ----
+        toolCenter.register(new ToolDefinition("classify_garbage",
+            "查询物品的垃圾分类。当用户询问「XX是什么垃圾」「XX属于哪类垃圾」「XX怎么扔」等问题时调用。" +
+            "覆盖可回收物、有害垃圾、湿垃圾（厨余垃圾）、干垃圾（其他垃圾）四类。" +
+            "支持模糊匹配，如输入「奶茶杯」「旧手机」「苹果核」等。",
+            Map.of(
+                "item", Map.of("type", "string", "description", "要查询的物品名称，如：电池、旧衣服、苹果核、大骨头")
+            ),
+            args -> {
+                String item = args.has("item") ? args.get("item").getAsString() : "";
+                return garbage.classify(item);
             }));
     }
 
