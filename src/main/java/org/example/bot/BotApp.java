@@ -371,7 +371,7 @@ public class BotApp {
             FinanceService finance, WebReaderService webReader, String userId) {
         toolCenter.buildTools(tools, executors, userId);
 
-        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的访问）---
+        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的异步访问）---
         tools.add(functionDef("play_music",
             "搜索并播放歌曲试听。当用户说「我想听」「放一首」「来一首」「唱一首」「播放」等时调用。",
             Map.of(
@@ -382,16 +382,18 @@ public class BotApp {
             String song = args.has("song") ? args.get("song").getAsString() : "";
             String artist = args.has("artist") ? args.get("artist").getAsString() : "";
             String result = music.search(song, artist);
-            if (result.contains("音频URL:")) {
-                String rawUrl = result.substring(result.indexOf("音频URL:") + 7).trim();
-                final String audioUrl = rawUrl.substring(0,
-                    rawUrl.indexOf("\n") > 0 ? rawUrl.indexOf("\n") : rawUrl.length()).trim();
-                IMAGE_EXECUTOR.submit(() -> {
-                    try {
-                        byte[] data = ((MusicServiceImpl) music).downloadSong(audioUrl);
-                        bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
-                    } catch (Exception ignored) {}
-                });
+            // 提取音频 URL 并异步下载发送
+            int urlIdx = result.indexOf("音频URL:");
+            if (urlIdx >= 0) {
+                String audioUrl = result.substring(urlIdx + 7).lines().findFirst().orElse("").trim();
+                if (!audioUrl.isBlank()) {
+                    IMAGE_EXECUTOR.submit(() -> {
+                        try {
+                            byte[] data = music.downloadSong(audioUrl);
+                            bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
+                        } catch (Exception ignored) {}
+                    });
+                }
             }
             return result;
         });
