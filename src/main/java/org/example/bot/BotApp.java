@@ -791,11 +791,11 @@ public class BotApp {
                 "idiom", Map.of("type", "string", "description", "玩家说的成语（四字），如果说「开始」「成语接龙」等则传空字符串启动游戏")
             ),
             args -> {
-                String idiom = args.has("idiom") ? args.get("idiom").getAsString() : "";
-                if (idiom.isBlank()) {
+                String input = args.has("idiom") ? args.get("idiom").getAsString() : "";
+                if (input.isBlank()) {
                     return idiom.startGame(ToolCenter.currentUserId());
                 }
-                return idiom.play(ToolCenter.currentUserId(), idiom);
+                return idiom.play(ToolCenter.currentUserId(), input);
             }));
     }
 
