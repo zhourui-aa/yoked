@@ -818,6 +818,42 @@ public class BotApp {
                 String item = args.has("item") ? args.get("item").getAsString() : "";
                 return garbage.classify(item);
             }));
+
+        // ---- 聊天记录查询 ----
+        final db.ChatRepository chatRepo = ((DeepSeekAiServiceImpl) ai).getChatRepo();
+        toolCenter.register(new ToolDefinition("search_chat_history",
+            "搜索当前会话的聊天记录。当用户说「之前聊过什么」「查聊天记录」「翻翻历史」「我们说过什么」等时调用。" +
+            "⚠️ count 参数规则：用户只是笼统地问「最近聊啥」，count 填 10；" +
+            "如果用户指定了时间范围（如「两天前」「上周」「很久以前」），count 填 50 或更大。" +
+            "不要编造不存在的聊天记录，只报告工具返回的内容。",
+            Map.of(
+                "keyword", Map.of("type", "string", "description", "搜索关键词，不填则返回匹配的全部"),
+                "count", Map.of("type", "integer", "description", "返回条数：笼统询问填10，有时间限定填50+")
+            ),
+            args -> {
+                String uid = ToolCenter.currentUserId();
+                String keyword = args.has("keyword") && !args.get("keyword").isJsonNull()
+                    ? args.get("keyword").getAsString() : "";
+                int count = args.has("count") ? args.get("count").getAsInt() : 10;
+                // 从库多取一些（有关键词过滤时可能漏掉），但最多 200 条
+                int fetchSize = Math.min(count * 3, 200);
+                var history = chatRepo.loadHistory(uid, "默认", fetchSize);
+                if (history.isEmpty()) return "当前没有聊天记录。";
+                StringBuilder sb = new StringBuilder("聊天记录：\n");
+                int shown = 0;
+                for (String[] entry : history) {
+                    String content = entry[1].length() > 80
+                        ? entry[1].substring(0, 80) + "…" : entry[1];
+                    if (keyword.isBlank() || content.contains(keyword)) {
+                        sb.append("[").append(entry[0].equals("user") ? "用户" : "助手").append("] ")
+                          .append(content).append("\n");
+                        shown++;
+                        if (shown >= count) break;
+                    }
+                }
+                return sb.length() == "聊天记录：\n".length()
+                    ? "没有找到包含「" + keyword + "」的聊天记录。" : sb.toString().strip();
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */

@@ -33,4 +33,12 @@ class Session {
         roles.clear();
         contents.clear();
     }
+
+    /** 从数据库批量恢复历史（按时间顺序） */
+    void loadFromDb(List<String[]> history) {
+        for (String[] entry : history) {
+            roles.add(entry[0]);
+            contents.add(entry[1]);
+        }
+    }
 }

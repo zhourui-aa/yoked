@@ -6,6 +6,7 @@ import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.FunctionDefinition;
 import com.openai.models.chat.completions.*;
+import db.ChatRepository;
 import org.example.bot.service.AiService;
 import org.example.bot.util.ConfigUtil;
 
@@ -25,6 +26,7 @@ public class DeepSeekAiServiceImpl implements AiService {
     private final Gson gson = new Gson();
     private final SessionManager sessionManager;
     private final BotState botState;
+    private final ChatRepository repo;
 
     public DeepSeekAiServiceImpl(String defaultPersona, String techInstructions) {
 
@@ -41,12 +43,25 @@ public class DeepSeekAiServiceImpl implements AiService {
                 .build();
         this.sessionManager = new SessionManager(defaultPersona, techInstructions);
         this.botState = new BotState();
+        this.repo = new ChatRepository();
 
         System.out.println("[AI] DeepSeek 服务已就绪（模型: " + MODEL + "）");
     }
 
     /** per-user 媒体缓存（图片、文档、新闻），线程安全 */
     public BotState getBotState() { return botState; }
+    public ChatRepository getChatRepo() { return repo; }
+
+    /** 如果 session 是空的，从库恢复历史 */
+    private void restoreSession(String userId, Session session) {
+        repo.ensureSession(userId, session.name, session.persona);
+        if (!session.roles.isEmpty()) return;
+        var history = repo.loadHistory(userId, session.name, 50);
+        if (!history.isEmpty()) {
+            session.loadFromDb(history);
+            System.out.println("[AI] 从库恢复 " + history.size() + " 条: " + userId + "/" + session.name);
+        }
+    }
 
     @Override
     public void setPersona(String userId, String persona) {
@@ -58,9 +73,11 @@ public class DeepSeekAiServiceImpl implements AiService {
     @Override
     public String chat(String userId, String userMessage) {
         Session session = sessionManager.getOrCreate(userId);
+        restoreSession(userId, session);
 
         session.add("user", userMessage);
         session.trim(MAX_HISTORY);
+        repo.saveMessage(userId, session.name, "user", userMessage);
 
         try {
             ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
@@ -79,6 +96,7 @@ public class DeepSeekAiServiceImpl implements AiService {
 
             String reply = completion.choices().get(0).message().content().orElse("");
             session.add("assistant", reply);
+            repo.saveMessage(userId, session.name, "assistant", reply);
             return reply;
 
         } catch (Exception e) {
@@ -97,9 +115,12 @@ public class DeepSeekAiServiceImpl implements AiService {
     @Override
     public void record(String userId, String userInput, String assistantOutput) {
         Session session = sessionManager.getOrCreate(userId);
+        restoreSession(userId, session);
         session.add("user", userInput);
         session.add("assistant", assistantOutput);
         session.trim(MAX_HISTORY);
+        repo.saveMessage(userId, session.name, "user", userInput);
+        repo.saveMessage(userId, session.name, "assistant", assistantOutput);
     }
 
     // ---- 统一 Function Calling ----
@@ -111,8 +132,10 @@ public class DeepSeekAiServiceImpl implements AiService {
                                 List<FunctionDefinition> tools,
                                 Map<String, java.util.function.Function<JsonObject, String>> executors) {
         Session session = sessionManager.getOrCreate(userId);
+        restoreSession(userId, session);
         session.add("user", userMessage);
         session.trim(MAX_HISTORY);
+        repo.saveMessage(userId, session.name, "user", userMessage);
 
         try {
             // 步骤 1: 构建请求 — 系统提示 + 对话历史 + 全部工具
@@ -145,6 +168,7 @@ public class DeepSeekAiServiceImpl implements AiService {
                     String reply = message.content().orElse("");
                     if (!reply.isBlank()) {
                         session.add("assistant", reply);
+                        repo.saveMessage(userId, session.name, "assistant", reply);
                         return reply;
                     }
                     return null; // 第一轮就没有 tool_call 也没内容 → 降级
@@ -209,6 +233,7 @@ public class DeepSeekAiServiceImpl implements AiService {
             // 超过最大轮次 — 返回最后一条消息（不含 tool_calls 的）
             String reply = message.content().orElse("抱歉，处理超时，请简化你的请求。");
             session.add("assistant", reply);
+            repo.saveMessage(userId, session.name, "assistant", reply);
             return reply;
 
         } catch (Exception e) {
