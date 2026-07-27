@@ -844,13 +844,87 @@ public class BotApp {
             args -> log.getTodayStats()));
 
         toolCenter.register(new ToolDefinition("get_user_history",
-            "查询当前用户的消息历史记录。当用户说「查看历史」「历史记录」等时调用。",
+            "查询当前用户的消息历史记录。当用户说「查看历史」「历史记录」「查看全部历史」「聊天记录」「查看消息」等时调用。",
             Map.of(
-                "limit", Map.of("type", "integer", "description", "返回条数，默认20")
+                "limit", Map.of("type", "integer", "description", "返回条数，默认20，全部历史请设置更大值如100")
             ),
             args -> {
                 int limit = args.has("limit") ? args.get("limit").getAsInt() : 20;
                 return log.getUserHistory(ToolCenter.currentUserId(), limit);
+            }));
+
+        // ---- 历史记录管理（增删改查）----
+        toolCenter.register(new ToolDefinition("delete_record",
+            "删除指定的历史记录。需要提供表名和记录ID。表名只能是 user_messages 或 bot_replies。",
+            Map.of(
+                "tableName", Map.of("type", "string", "description", "表名：user_messages 或 bot_replies"),
+                "id", Map.of("type", "integer", "description", "记录ID")
+            ),
+            args -> {
+                String tableName = args.has("tableName") ? args.get("tableName").getAsString() : "";
+                int id = args.has("id") ? args.get("id").getAsInt() : 0;
+                return log.deleteRecord(tableName, id);
+            }));
+
+        toolCenter.register(new ToolDefinition("update_record",
+            "修改指定的历史记录内容。需要提供表名、记录ID和新内容。",
+            Map.of(
+                "tableName", Map.of("type", "string", "description", "表名：user_messages 或 bot_replies"),
+                "id", Map.of("type", "integer", "description", "记录ID"),
+                "content", Map.of("type", "string", "description", "新内容")
+            ),
+            args -> {
+                String tableName = args.has("tableName") ? args.get("tableName").getAsString() : "";
+                int id = args.has("id") ? args.get("id").getAsInt() : 0;
+                String content = args.has("content") ? args.get("content").getAsString() : "";
+                return log.updateRecord(tableName, id, content);
+            }));
+
+        toolCenter.register(new ToolDefinition("clear_history",
+            "清空当前用户的所有历史记录。谨慎使用！",
+            Map.of(),
+            args -> log.clearUserHistory(ToolCenter.currentUserId())));
+
+        toolCenter.register(new ToolDefinition("add_history",
+            "手动添加一条用户消息到历史记录。",
+            Map.of(
+                "message", Map.of("type", "string", "description", "消息内容")
+            ),
+            args -> {
+                String message = args.has("message") ? args.get("message").getAsString() : "";
+                return log.addUserMessage(ToolCenter.currentUserId(), message);
+            }));
+
+        toolCenter.register(new ToolDefinition("delete_history_by_content",
+            "按关键词搜索并删除匹配的历史记录。当用户说「删除xxx这条记录」「删掉xxx」时调用。",
+            Map.of(
+                "keyword", Map.of("type", "string", "description", "要删除的记录内容关键词")
+            ),
+            args -> {
+                String keyword = args.has("keyword") ? args.get("keyword").getAsString() : "";
+                return log.deleteByContent(ToolCenter.currentUserId(), keyword);
+            }));
+
+        toolCenter.register(new ToolDefinition("delete_by_number",
+            "按编号删除历史记录。编号来自查看历史时显示的数字。当用户说「删除编号5」「删除第5条」「删除第5条记录」「删5」「删除5」时调用。",
+            Map.of(
+                "number", Map.of("type", "integer", "description", "要删除的记录编号")
+            ),
+            args -> {
+                int number = args.has("number") ? args.get("number").getAsInt() : 0;
+                return log.deleteByNumber(ToolCenter.currentUserId(), number);
+            }));
+
+        toolCenter.register(new ToolDefinition("update_by_number",
+            "按编号修改历史记录内容。编号来自查看历史时显示的数字。当用户说「修改编号3」「改第3条」「修改第3条记录」「改3」时调用。",
+            Map.of(
+                "number", Map.of("type", "integer", "description", "要修改的记录编号"),
+                "content", Map.of("type", "string", "description", "新内容")
+            ),
+            args -> {
+                int number = args.has("number") ? args.get("number").getAsInt() : 0;
+                String content = args.has("content") ? args.get("content").getAsString() : "";
+                return log.updateByNumber(ToolCenter.currentUserId(), number, content);
             }));
     }
 

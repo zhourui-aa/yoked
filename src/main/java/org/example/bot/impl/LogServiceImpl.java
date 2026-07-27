@@ -8,6 +8,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -147,17 +149,21 @@ public class LogServiceImpl implements LogService {
         if (limit <= 0) limit = 20;
 
         StringBuilder sb = new StringBuilder();
-        sb.append("📋 当前用户ID: ").append(userId).append("\n");
+        sb.append("📋 历史记录（当前用户：").append(truncate(userId, 20)).append("）\n");
         sb.append("━━━━━━━━━━━━━━━━━━━━\n");
+        sb.append("操作方式：\n");
+        sb.append("  • 删除：「删除编号5」「删除第5条」\n");
+        sb.append("  • 修改：「修改编号5 新内容」\n");
+        sb.append("━━━━━━━━━━━━━━━━━━━━\n\n");
 
         try (Connection conn = getConnection()) {
-            // 先查当前用户的记录
+            // 先查当前用户的记录，包含 ID
             String sql = """
-                SELECT '用户' as type, message as content, created_at 
+                SELECT '用户' as type, 'user_messages' as table_name, id, message as content, created_at 
                 FROM user_messages 
                 WHERE user_id = ? 
                 UNION ALL 
-                SELECT '机器人' as type, reply as content, created_at 
+                SELECT '机器人' as type, 'bot_replies' as table_name, id, reply as content, created_at 
                 FROM bot_replies 
                 WHERE user_id = ? 
                 ORDER BY created_at DESC 
@@ -170,52 +176,29 @@ public class LogServiceImpl implements LogService {
 
                 try (ResultSet rs = pstmt.executeQuery()) {
                     boolean hasData = false;
+                    int index = 1;
                     while (rs.next()) {
                         hasData = true;
                         String type = rs.getString("type");
+                        int id = rs.getInt("id");
                         String content = rs.getString("content");
                         String time = rs.getString("created_at");
 
-                        sb.append("\n[").append(time).append("] ");
+                        // 提取时间中的时分部分
+                        String timeDisplay = time;
+                        if (time.length() >= 16) {
+                            timeDisplay = time.substring(11, 16); // HH:mm
+                        }
+
+                        sb.append(index++).append(". ");
                         sb.append(type.equals("用户") ? "👤" : "🤖").append(" ");
-                        sb.append(truncate(content, 100));
+                        sb.append("[").append(timeDisplay).append("] ");
+                        sb.append(truncate(content, 80));
+                        sb.append("\n");
                     }
 
                     if (!hasData) {
-                        // 当前用户没有记录，查询所有用户的记录
-                        sb.append("当前用户暂无记录，以下是所有用户的历史记录：\n");
-                        sb.append("━━━━━━━━━━━━━━━━━━━━\n");
-
-                        String allSql = """
-                            SELECT '用户' as type, user_id, message as content, created_at 
-                            FROM user_messages 
-                            UNION ALL 
-                            SELECT '机器人' as type, user_id, reply as content, created_at 
-                            FROM bot_replies 
-                            ORDER BY created_at DESC 
-                            LIMIT ?""";
-
-                        try (PreparedStatement allStmt = conn.prepareStatement(allSql)) {
-                            allStmt.setInt(1, limit);
-                            try (ResultSet allRs = allStmt.executeQuery()) {
-                                boolean hasAllData = false;
-                                while (allRs.next()) {
-                                    hasAllData = true;
-                                    String uid = allRs.getString("user_id");
-                                    String type = allRs.getString("type");
-                                    String content = allRs.getString("content");
-                                    String time = allRs.getString("created_at");
-
-                                    sb.append("\n[").append(time).append("] ");
-                                    sb.append(type.equals("用户") ? "👤" : "🤖").append(" ");
-                                    sb.append("(").append(truncate(uid, 20)).append(") ");
-                                    sb.append(truncate(content, 100));
-                                }
-                                if (!hasAllData) {
-                                    sb.append("数据库中暂无任何记录\n");
-                                }
-                            }
-                        }
+                        sb.append("暂无历史记录\n");
                     }
                 }
             }
@@ -355,6 +338,285 @@ public class LogServiceImpl implements LogService {
             }
         } catch (Exception e) {
             System.err.println("[日志] ❌ 加载历史记录失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public String deleteRecord(String tableName, int id) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (!tableName.equals("user_messages") && !tableName.equals("bot_replies")) {
+            return "❌ 无效的表名，只能是 user_messages 或 bot_replies";
+        }
+
+        try (Connection conn = getConnection()) {
+            String sql = "DELETE FROM " + tableName + " WHERE id = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setInt(1, id);
+                int affected = pstmt.executeUpdate();
+                if (affected > 0) {
+                    return "✅ 已删除 " + tableName + " 表中 ID 为 " + id + " 的记录";
+                } else {
+                    return "❌ 未找到 ID 为 " + id + " 的记录";
+                }
+            }
+        } catch (Exception e) {
+            return "❌ 删除失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String updateRecord(String tableName, int id, String newContent) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (!tableName.equals("user_messages") && !tableName.equals("bot_replies")) {
+            return "❌ 无效的表名，只能是 user_messages 或 bot_replies";
+        }
+        if (newContent == null || newContent.isBlank()) {
+            return "❌ 内容不能为空";
+        }
+
+        try (Connection conn = getConnection()) {
+            String column = tableName.equals("user_messages") ? "message" : "reply";
+            String sql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, truncate(newContent, 5000));
+                pstmt.setInt(2, id);
+                int affected = pstmt.executeUpdate();
+                if (affected > 0) {
+                    return "✅ 已修改 " + tableName + " 表中 ID 为 " + id + " 的记录";
+                } else {
+                    return "❌ 未找到 ID 为 " + id + " 的记录";
+                }
+            }
+        } catch (Exception e) {
+            return "❌ 修改失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String clearUserHistory(String userId) {
+        if (!initialized.get()) return "日志服务未就绪";
+
+        try (Connection conn = getConnection()) {
+            // 删除用户消息
+            String userSql = "DELETE FROM user_messages WHERE user_id = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(userSql)) {
+                pstmt.setString(1, userId);
+                int userDeleted = pstmt.executeUpdate();
+            }
+
+            // 删除机器人回复
+            String replySql = "DELETE FROM bot_replies WHERE user_id = ?";
+            try (PreparedStatement pstmt = conn.prepareStatement(replySql)) {
+                pstmt.setString(1, userId);
+                int replyDeleted = pstmt.executeUpdate();
+            }
+
+            return "✅ 已清空用户「" + userId + "」的所有历史记录";
+        } catch (Exception e) {
+            return "❌ 清空失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String addUserMessage(String userId, String message) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (message == null || message.isBlank()) {
+            return "❌ 消息内容不能为空";
+        }
+
+        try (Connection conn = getConnection()) {
+            String sql = "INSERT INTO user_messages (user_id, message, message_type, created_at) VALUES (?, ?, ?, ?)";
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, userId);
+                pstmt.setString(2, truncate(message, 5000));
+                pstmt.setString(3, "text");
+                pstmt.setString(4, LocalDateTime.now().format(FORMATTER));
+                pstmt.executeUpdate();
+            }
+            return "✅ 已添加用户消息记录";
+        } catch (Exception e) {
+            return "❌ 添加失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String deleteByContent(String userId, String keyword) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (keyword == null || keyword.isBlank()) {
+            return "❌ 关键词不能为空";
+        }
+
+        try (Connection conn = getConnection()) {
+            // 先搜索匹配的记录
+            String searchSql = """
+                SELECT '用户消息' as type, id, message FROM user_messages WHERE user_id = ? AND message LIKE ?
+                UNION ALL
+                SELECT '机器人回复' as type, id, reply FROM bot_replies WHERE user_id = ? AND reply LIKE ?
+                LIMIT 10""";
+
+            try (PreparedStatement pstmt = conn.prepareStatement(searchSql)) {
+                pstmt.setString(1, userId);
+                pstmt.setString(2, "%" + keyword + "%");
+                pstmt.setString(3, userId);
+                pstmt.setString(4, "%" + keyword + "%");
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    List<String> results = new ArrayList<>();
+                    while (rs.next()) {
+                        String type = rs.getString("type");
+                        int id = rs.getInt("id");
+                        String content = rs.getString("message");
+                        if (content == null) content = rs.getString("reply");
+                        results.add(type + " (ID:" + id + "): " + truncate(content, 50));
+                    }
+
+                    if (results.isEmpty()) {
+                        return "❌ 没有找到包含「" + keyword + "」的记录";
+                    }
+
+                    // 删除所有匹配的记录
+                    String deleteUserSql = "DELETE FROM user_messages WHERE user_id = ? AND message LIKE ?";
+                    try (PreparedStatement deletePstmt = conn.prepareStatement(deleteUserSql)) {
+                        deletePstmt.setString(1, userId);
+                        deletePstmt.setString(2, "%" + keyword + "%");
+                        int userDeleted = deletePstmt.executeUpdate();
+                    }
+
+                    String deleteReplySql = "DELETE FROM bot_replies WHERE user_id = ? AND reply LIKE ?";
+                    try (PreparedStatement deletePstmt = conn.prepareStatement(deleteReplySql)) {
+                        deletePstmt.setString(1, userId);
+                        deletePstmt.setString(2, "%" + keyword + "%");
+                        int replyDeleted = deletePstmt.executeUpdate();
+                    }
+
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("✅ 已删除以下记录：\n");
+                    for (String r : results) {
+                        sb.append("  - ").append(r).append("\n");
+                    }
+                    return sb.toString();
+                }
+            }
+        } catch (Exception e) {
+            return "❌ 删除失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String deleteByNumber(String userId, int number) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (number <= 0) {
+            return "❌ 编号必须大于0";
+        }
+
+        try (Connection conn = getConnection()) {
+            // 先查询第 number 条记录的详细信息
+            String searchSql = """
+                SELECT type, table_name, id, content 
+                FROM (
+                    SELECT '用户消息' as type, 'user_messages' as table_name, id, message as content 
+                    FROM user_messages WHERE user_id = ?
+                    UNION ALL
+                    SELECT '机器人回复' as type, 'bot_replies' as table_name, id, reply as content 
+                    FROM bot_replies WHERE user_id = ?
+                    ORDER BY created_at DESC
+                )
+                LIMIT 1 OFFSET ?""";
+
+            try (PreparedStatement pstmt = conn.prepareStatement(searchSql)) {
+                pstmt.setString(1, userId);
+                pstmt.setString(2, userId);
+                pstmt.setInt(3, number - 1);  // OFFSET 从0开始
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (!rs.next()) {
+                        return "❌ 没有找到编号为 " + number + " 的记录";
+                    }
+
+                    String type = rs.getString("type");
+                    String tableName = rs.getString("table_name");
+                    int id = rs.getInt("id");
+                    String content = rs.getString("content");
+
+                    // 删除该记录
+                    String deleteSql = "DELETE FROM " + tableName + " WHERE id = ?";
+                    try (PreparedStatement deletePstmt = conn.prepareStatement(deleteSql)) {
+                        deletePstmt.setInt(1, id);
+                        int affected = deletePstmt.executeUpdate();
+                        if (affected > 0) {
+                            return "✅ 已删除编号 " + number + "：\n" +
+                                   "类型: " + type + "\n" +
+                                   "内容: " + truncate(content, 100);
+                        } else {
+                            return "❌ 删除失败，记录可能已被删除";
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            return "❌ 删除失败: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public String updateByNumber(String userId, int number, String newContent) {
+        if (!initialized.get()) return "日志服务未就绪";
+        if (number <= 0) {
+            return "❌ 编号必须大于0";
+        }
+        if (newContent == null || newContent.isBlank()) {
+            return "❌ 新内容不能为空";
+        }
+
+        try (Connection conn = getConnection()) {
+            // 先查询第 number 条记录的详细信息
+            String searchSql = """
+                SELECT type, table_name, id, content 
+                FROM (
+                    SELECT '用户消息' as type, 'user_messages' as table_name, id, message as content 
+                    FROM user_messages WHERE user_id = ?
+                    UNION ALL
+                    SELECT '机器人回复' as type, 'bot_replies' as table_name, id, reply as content 
+                    FROM bot_replies WHERE user_id = ?
+                    ORDER BY created_at DESC
+                )
+                LIMIT 1 OFFSET ?""";
+
+            try (PreparedStatement pstmt = conn.prepareStatement(searchSql)) {
+                pstmt.setString(1, userId);
+                pstmt.setString(2, userId);
+                pstmt.setInt(3, number - 1);  // OFFSET 从0开始
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    if (!rs.next()) {
+                        return "❌ 没有找到编号为 " + number + " 的记录";
+                    }
+
+                    String type = rs.getString("type");
+                    String tableName = rs.getString("table_name");
+                    int id = rs.getInt("id");
+                    String oldContent = rs.getString("content");
+
+                    // 修改该记录
+                    String column = tableName.equals("user_messages") ? "message" : "reply";
+                    String updateSql = "UPDATE " + tableName + " SET " + column + " = ? WHERE id = ?";
+                    try (PreparedStatement updatePstmt = conn.prepareStatement(updateSql)) {
+                        updatePstmt.setString(1, truncate(newContent, 5000));
+                        updatePstmt.setInt(2, id);
+                        int affected = updatePstmt.executeUpdate();
+                        if (affected > 0) {
+                            return "✅ 已修改编号 " + number + "：\n" +
+                                   "类型: " + type + "\n" +
+                                   "原内容: " + truncate(oldContent, 50) + "\n" +
+                                   "新内容: " + truncate(newContent, 50);
+                        } else {
+                            return "❌ 修改失败，记录可能已被删除";
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            return "❌ 修改失败: " + e.getMessage();
         }
     }
 }

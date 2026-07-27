@@ -162,6 +162,7 @@ public class DeepSeekAiServiceImpl implements AiService {
                 }
 
                 // 执行本轮所有工具
+                StringBuilder toolResults = new StringBuilder();
                 for (ChatCompletionMessageToolCall tc : toolCalls) {
                     ChatCompletionMessageFunctionToolCall funcCall = tc.asFunction();
                     String funcName = funcCall.function().name();
@@ -176,6 +177,10 @@ public class DeepSeekAiServiceImpl implements AiService {
                         ? executor.apply(args)
                         : "工具 " + funcName + " 未注册执行器";
 
+                    // 保存工具结果，用于降级返回
+                    if (!toolResults.isEmpty()) toolResults.append("\n\n");
+                    toolResults.append(result);
+
                     try {
                         builder.addMessage(ChatCompletionToolMessageParam.builder()
                                 .toolCallId(funcCall.id())
@@ -184,7 +189,7 @@ public class DeepSeekAiServiceImpl implements AiService {
                     } catch (Exception e) {
                         System.err.println("[AI] ❌ 构建工具结果消息失败 tool=" + funcName
                             + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                        return null;
+                        return result; // 返回单个工具结果
                     }
                 }
 
@@ -202,7 +207,8 @@ public class DeepSeekAiServiceImpl implements AiService {
                         c = c.getCause();
                     }
                     System.err.println(msg);
-                    return null;
+                    // 工具调用成功了，直接返回工具结果
+                    return toolResults.toString();
                 }
             }
 
