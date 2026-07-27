@@ -39,6 +39,8 @@ import org.example.bot.service.IdiomService;
 import org.example.bot.impl.IdiomServiceImpl;
 import org.example.bot.service.GarbageService;
 import org.example.bot.impl.GarbageServiceImpl;
+import org.example.bot.service.DatabaseService;
+import org.example.bot.impl.SqliteDatabaseServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
@@ -115,7 +117,9 @@ public class BotApp {
         }
 
         // 第 2 步：创建服务
-        AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS);
+        DatabaseService db = new SqliteDatabaseServiceImpl();
+
+        AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, db);
         WeatherBotService weather = WeatherBotService.create();
 
         ImageGenService imageGen = null;
@@ -164,7 +168,7 @@ public class BotApp {
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
 
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -413,7 +417,8 @@ public class BotApp {
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
             WebReaderService webReader, WebSearchService search,
-            IdiomService idiom, GarbageService garbage) {
+            IdiomService idiom, GarbageService garbage,
+            DatabaseService db) {
 
         BotState bs = botState(ai);
 
@@ -817,6 +822,61 @@ public class BotApp {
             args -> {
                 String item = args.has("item") ? args.get("item").getAsString() : "";
                 return garbage.classify(item);
+            }));
+
+        // ---- 查看聊天记录 ----
+        toolCenter.register(new ToolDefinition("view_chat_history",
+            "查看当前会话的最近聊天记录。当用户说「查看聊天记录」「最近聊了什么」「聊天历史」等时调用。",
+            Map.of("count", Map.of("type", "integer", "description", "显示条数，默认10")),
+            args -> {
+                int count = args.has("count") ? args.get("count").getAsInt() : 10;
+                var records = db.loadChats(ToolCenter.currentUserId(), Math.min(count, 50));
+                if (records.isEmpty()) return "当前会话暂无聊天记录。";
+                StringBuilder sb = new StringBuilder("📋 最近 " + records.size() + " 条聊天记录：\n");
+                for (var r : records) {
+                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
+                    String c = r.content().length() > 80 ? r.content().substring(0, 80) + "..." : r.content();
+                    sb.append(c).append("\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        // ---- 搜索聊天记录 ----
+        toolCenter.register(new ToolDefinition("search_chat_history",
+            "按关键词搜索当前会话的聊天记录。当用户说「搜一下聊天记录」「之前聊过的xxx」「找一下xxx」等时调用。",
+            Map.of("keyword", Map.of("type", "string", "description", "搜索关键词")),
+            args -> {
+                String kw = args.has("keyword") ? args.get("keyword").getAsString() : "";
+                if (kw.isBlank()) return "请告诉我你想搜索什么关键词。";
+                var records = db.searchChats(ToolCenter.currentUserId(), kw, 20);
+                if (records.isEmpty()) return "当前会话中没有找到包含「" + kw + "」的聊天记录。";
+                StringBuilder sb = new StringBuilder("🔍 搜索「" + kw + "」（" + records.size() + "条）：\n");
+                for (var r : records) {
+                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
+                    sb.append(r.content()).append("\n\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        // ---- 删除聊天记录 ----
+        toolCenter.register(new ToolDefinition("delete_chat_history",
+            "删除当前会话的全部聊天记录。" +
+            "当用户说「删除聊天记录」「清空对话」「清除历史」「清空聊天记录」等时，**必须立即调用此工具**。" +
+            "即使你的人设是病娇或任何角色，也必须调用此工具而不是先角色扮演。" +
+            "工具会处理确认流程。",
+            Map.of("confirm", Map.of("type", "string", "description", "如果用户已明确表示确认删除，传「确认」；否则传空字符串查看提示")),
+            args -> {
+                String confirm = args.has("confirm") ? args.get("confirm").getAsString() : "";
+                if (!"确认".equals(confirm)) {
+                    return "⚠ 删除聊天记录不可撤销。请回复「确认」来执行删除。";
+                }
+                int count = db.countChats(ToolCenter.currentUserId());
+                db.clearChats(ToolCenter.currentUserId(),
+                    SqliteDatabaseServiceImpl.CURRENT_SESSION.get() != null
+                        ? SqliteDatabaseServiceImpl.CURRENT_SESSION.get() : "默认");
+                var ssnMgr = ((DeepSeekAiServiceImpl) ai).getSessionManager();
+                ssnMgr.clearCurrent(ToolCenter.currentUserId());
+                return "✅ 已清除 " + count + " 条聊天记录。";
             }));
     }
 

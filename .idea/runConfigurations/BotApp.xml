@@ -2,6 +2,7 @@
   <configuration default="false" name="BotApp" type="Application" factoryName="Application">
     <option name="MAIN_CLASS_NAME" value="org.example.bot.BotApp" />
     <module name="wechatTest1" />
+    <option name="VM_PARAMETERS" value="--enable-native-access=ALL-UNNAMED" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
     <extension name="coverage">
       <pattern>
