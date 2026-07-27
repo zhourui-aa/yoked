@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * 一个对话会话 — 持有独立的对话历史和人设。
  */
-class Session {
+public class Session {
     final String name;
     String persona;
     final List<String> roles = new ArrayList<>();

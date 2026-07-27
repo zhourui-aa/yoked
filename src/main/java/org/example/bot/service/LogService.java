@@ -1,5 +1,7 @@
 package org.example.bot.service;
 
+import org.example.bot.impl.Session;
+
 /**
  * 日志记录服务接口 — 记录用户消息和机器人回复到数据库。
  *
@@ -38,4 +40,11 @@ public interface LogService {
      * @return 格式化的统计信息（消息数、回复数、平均响应时间等）
      */
     String getTodayStats();
+
+    /**
+     * 从数据库加载历史记录到会话中
+     * @param userId 用户 ID
+     * @param session 会话对象
+     */
+    void loadHistoryIntoSession(String userId, Session session);
 }

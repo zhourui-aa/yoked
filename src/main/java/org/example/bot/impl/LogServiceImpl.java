@@ -318,4 +318,43 @@ public class LogServiceImpl implements LogService {
         if (str.length() <= maxLen) return str;
         return str.substring(0, maxLen - 3) + "...";
     }
+
+    @Override
+    public void loadHistoryIntoSession(String userId, Session session) {
+        if (!initialized.get()) return;
+
+        try (Connection conn = getConnection()) {
+            // 查询用户和机器人的消息，按时间顺序排列
+            String sql = """
+                SELECT 'user' as type, message as content, created_at 
+                FROM user_messages 
+                WHERE user_id = ? 
+                UNION ALL 
+                SELECT 'assistant' as type, reply as content, created_at 
+                FROM bot_replies 
+                WHERE user_id = ? 
+                ORDER BY created_at ASC 
+                LIMIT 100""";
+
+            try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
+                pstmt.setString(1, userId);
+                pstmt.setString(2, userId);
+
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    int count = 0;
+                    while (rs.next()) {
+                        String type = rs.getString("type");
+                        String content = rs.getString("content");
+                        session.add(type, content);
+                        count++;
+                    }
+                    if (count > 0) {
+                        System.out.println("[日志] 已加载 " + count + " 条历史记录到会话（用户: " + userId + "）");
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[日志] ❌ 加载历史记录失败: " + e.getMessage());
+        }
+    }
 }

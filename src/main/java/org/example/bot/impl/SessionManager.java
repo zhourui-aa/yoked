@@ -72,7 +72,29 @@ public class SessionManager {
         }
         final String sessionName = name;
         Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
-        return userSessions.computeIfAbsent(sessionName, k -> new Session(sessionName, defaultPersona));
+        
+        // 如果会话不存在，创建并尝试加载历史记录
+        return userSessions.computeIfAbsent(sessionName, k -> {
+            Session session = new Session(sessionName, defaultPersona);
+            // 如果有历史加载器，加载历史记录
+            if (historyLoader != null) {
+                historyLoader.loadHistory(userId, session);
+            }
+            return session;
+        });
+    }
+
+    /** 历史记录加载器接口 */
+    @FunctionalInterface
+    public interface HistoryLoader {
+        void loadHistory(String userId, Session session);
+    }
+
+    private HistoryLoader historyLoader;
+
+    /** 设置历史记录加载器 */
+    public void setHistoryLoader(HistoryLoader loader) {
+        this.historyLoader = loader;
     }
 
     /** 创建新会话并切换过去 */

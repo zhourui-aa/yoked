@@ -166,6 +166,12 @@ public class BotApp {
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
 
         LogService logService = new LogServiceImpl();
+        System.out.println("[Bot] 📊 日志服务已就绪（SQLite）");
+
+        // 设置 AI 会话历史加载器 — 从数据库读取历史记录
+        ((DeepSeekAiServiceImpl) ai).getSessionManager().setHistoryLoader((userId, session) -> {
+            logService.loadHistoryIntoSession(userId, session);
+        });
 
         // ---- 向工具中心注册所有 FC 工具 ----
         registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, logService);
