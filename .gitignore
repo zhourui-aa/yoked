@@ -1,0 +1,15 @@
+.idea/
+target/
+out/
+*.class
+*.db
+*.db-shm
+*.db-wal
+*.zip
+.claude/
+CLAUDE.md
+project-explain.html
+项目深度解析.md
+.cp*.txt
+config.properties
+football_data.json
