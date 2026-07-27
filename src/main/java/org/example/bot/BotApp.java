@@ -313,6 +313,13 @@ public class BotApp {
             return true;
         }
 
+        // "查看人设" / "当前人设" / "我的人设"
+        if (text.equals("查看人设") || text.equals("当前人设") || text.equals("我的人设")) {
+            var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
+            bot.sendText(userId, sm.getPersona(userId));
+            return true;
+        }
+
         // "开启语音模式" / "关闭语音模式"
         if ((text.equals("开启语音模式") || text.equals("关闭语音模式")) && tts != null) {
             var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
