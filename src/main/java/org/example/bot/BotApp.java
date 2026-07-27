@@ -39,6 +39,10 @@ import org.example.bot.service.IdiomService;
 import org.example.bot.impl.IdiomServiceImpl;
 import org.example.bot.service.GarbageService;
 import org.example.bot.impl.GarbageServiceImpl;
+import game.GameCommand;
+import game.GameEngine;
+import game.GameRegistry;
+import game.impl.WerewolfEngine;
 import org.example.bot.service.DatabaseService;
 import org.example.bot.impl.SqliteDatabaseServiceImpl;
 import org.example.bot.tools.ToolCenter;
@@ -166,6 +170,10 @@ public class BotApp {
 
         GarbageService garbage = new GarbageServiceImpl();
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
+
+        // 注册桌游引擎
+        GameRegistry.register(new WerewolfEngine());
+        System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
         registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db);
@@ -359,6 +367,9 @@ public class BotApp {
             System.out.println("[回复] 新建bot: " + name);
             return true;
         }
+
+        // 桌游命令
+        if (GameCommand.handle(bot, userId, text)) return true;
 
         return false;
     }
