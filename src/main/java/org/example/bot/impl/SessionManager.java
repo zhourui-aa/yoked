@@ -98,6 +98,18 @@ public class SessionManager {
         // 3. 恢复语音模式
         String vm = db.loadUserPref(userId, "voice_mode");
         if ("true".equals(vm)) voiceMode.put(userId, true);
+
+        // 4. 恢复人设（兜底：如果 sessions 表没存，从 user_prefs 恢复）
+        String savedPersona = db.loadUserPref(userId, "persona");
+        if (savedPersona != null && !savedPersona.isBlank()) {
+            String curName = currentSession.get(userId);
+            if (curName != null && sessions.containsKey(userId)) {
+                Session s = sessions.get(userId).get(curName);
+                if (s != null && s.persona.equals(defaultPersona)) {
+                    s.persona = savedPersona;
+                }
+            }
+        }
     }
 
     /** 获取当前会话（没有则创建默认会话） */
@@ -107,10 +119,15 @@ public class SessionManager {
         if (name == null) {
             name = "默认";
             currentSession.put(userId, name);
+            if (db != null) db.saveUserPref(userId, "current_session", name);
         }
         final String sessionName = name;
         Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
-        Session s = userSessions.computeIfAbsent(sessionName, k -> new Session(sessionName, defaultPersona));
+        Session s = userSessions.computeIfAbsent(sessionName, k -> {
+            Session ns = new Session(sessionName, defaultPersona);
+            if (db != null) db.saveSessionMeta(userId, sessionName, defaultPersona);
+            return ns;
+        });
         setCurrentSessionTag(sessionName);
         return s;
     }
@@ -130,7 +147,10 @@ public class SessionManager {
         currentSession.put(userId, name);
         setCurrentSessionTag(name);
 
-        if (db != null) db.saveSessionMeta(userId, name, defaultPersona);
+        if (db != null) {
+            db.saveSessionMeta(userId, name, defaultPersona);
+            db.saveUserPref(userId, "current_session", name);
+        }
         return session;
     }
 
@@ -214,6 +234,12 @@ public class SessionManager {
         if (db != null && name != null) db.saveSessionMeta(userId, name, persona);
         // 同时保存为默认人设偏好
         if (db != null) db.saveUserPref(userId, "persona", persona);
+    }
+
+    /** 查看当前人设 */
+    public synchronized String getPersona(String userId) {
+        Session s = getOrCreate(userId);
+        return "🎭 当前人设：「" + s.persona + "」";
     }
 
     public synchronized boolean toggleVoiceMode(String userId) {
