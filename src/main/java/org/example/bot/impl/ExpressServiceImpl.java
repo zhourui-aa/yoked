@@ -78,8 +78,10 @@ public class ExpressServiceImpl implements ExpressService {
             }
 
             String json = queryTrack(shipperCode, num, phone);
+            System.out.println("[快递] API 返回: " + (json.length() > 200 ? json.substring(0, 200) + "..." : json));
             return formatResponse(json, shipperCode, num);
         } catch (Exception e) {
+            System.err.println("[快递] 查询异常: " + e.getClass().getSimpleName() + ": " + e.getMessage());
             return "快递查询失败：" + e.getMessage();
         }
     }

@@ -39,6 +39,8 @@ import org.example.bot.service.IdiomService;
 import org.example.bot.impl.IdiomServiceImpl;
 import org.example.bot.service.GarbageService;
 import org.example.bot.impl.GarbageServiceImpl;
+import org.example.bot.service.LogService;
+import org.example.bot.impl.LogServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
@@ -163,8 +165,10 @@ public class BotApp {
         GarbageService garbage = new GarbageServiceImpl();
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
 
+        LogService logService = new LogServiceImpl();
+
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, logService);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -184,6 +188,7 @@ public class BotApp {
         final WebSearchService fSearch = search;
         final IdiomService fIdiom = idiom;
         final GarbageService fGarbage = garbage;
+        final LogService fLog = logService;
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -191,25 +196,29 @@ public class BotApp {
             ILinkBot bot = BotCluster.current();
 
             if (msg.isVoice()) {
-                System.out.println("[收到] " + userId + " : [语音] "
-                    + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader, msg);
+                String voiceText = msg.voiceText() != null ? msg.voiceText() : "";
+                System.out.println("[收到] " + userId + " : [语音] " + voiceText);
+                fLog.logUserMessage(userId, null, voiceText, "voice");
+                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader, fLog, msg);
                 return;
             }
             if (msg.isImage()) {
                 System.out.println("[收到] " + userId + " : [图片] " + msg.text());
+                fLog.logUserMessage(userId, null, msg.text(), "image");
                 handleImage(bot, fAi, fVision, msg);
                 return;
             }
             if (msg.isFile()) {
                 System.out.println("[收到] " + userId + " : [文件] " + msg.fileName());
+                fLog.logUserMessage(userId, null, msg.fileName(), "file");
                 handleFile(bot, fAi, userId, msg);
                 return;
             }
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader,
+            fLog.logUserMessage(userId, null, text, "text");
+            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader, fLog,
                                userId, text, false);
         });
 
@@ -249,6 +258,7 @@ public class BotApp {
                                            ImageGenService imageGen, NewsService news,
                                            FinanceService finance,
                                            WebReaderService webReader,
+                                           LogService log,
                                            String userId, String text, boolean forceVoice) {
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
@@ -270,6 +280,7 @@ public class BotApp {
             if (fcResult != null) {
                 System.out.println("[回复] " + fcResult);
                 bot.sendTextWithTyping(userId, fcResult, 500L);
+                log.logBotReply(userId, fcResult, null, 0);
                 if (wantsVoice || isVoiceMode(ai, userId))
                     sendAsVoice(bot, tts, userId, fcResult);
                 return;
@@ -281,6 +292,7 @@ public class BotApp {
         String reply = ai.chat(userId, text);
         System.out.println("[回复] " + reply);
         bot.sendTextWithTyping(userId, reply, 500L);
+        log.logBotReply(userId, reply, null, 0);
         if (wantsVoice || isVoiceMode(ai, userId))
             sendAsVoice(bot, tts, userId, reply);
     }
@@ -371,7 +383,7 @@ public class BotApp {
             FinanceService finance, WebReaderService webReader, String userId) {
         toolCenter.buildTools(tools, executors, userId);
 
-        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的访问）---
+        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的异步访问）---
         tools.add(functionDef("play_music",
             "搜索并播放歌曲试听。当用户说「我想听」「放一首」「来一首」「唱一首」「播放」等时调用。",
             Map.of(
@@ -382,16 +394,18 @@ public class BotApp {
             String song = args.has("song") ? args.get("song").getAsString() : "";
             String artist = args.has("artist") ? args.get("artist").getAsString() : "";
             String result = music.search(song, artist);
-            if (result.contains("音频URL:")) {
-                String rawUrl = result.substring(result.indexOf("音频URL:") + 7).trim();
-                final String audioUrl = rawUrl.substring(0,
-                    rawUrl.indexOf("\n") > 0 ? rawUrl.indexOf("\n") : rawUrl.length()).trim();
-                IMAGE_EXECUTOR.submit(() -> {
-                    try {
-                        byte[] data = ((MusicServiceImpl) music).downloadSong(audioUrl);
-                        bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
-                    } catch (Exception ignored) {}
-                });
+            // 提取音频 URL 并异步下载发送
+            int urlIdx = result.indexOf("音频URL:");
+            if (urlIdx >= 0) {
+                String audioUrl = result.substring(urlIdx + 7).lines().findFirst().orElse("").trim();
+                if (!audioUrl.isBlank()) {
+                    IMAGE_EXECUTOR.submit(() -> {
+                        try {
+                            byte[] data = music.downloadSong(audioUrl);
+                            bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
+                        } catch (Exception ignored) {}
+                    });
+                }
             }
             return result;
         });
@@ -411,7 +425,7 @@ public class BotApp {
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
             WebReaderService webReader, WebSearchService search,
-            IdiomService idiom, GarbageService garbage) {
+            IdiomService idiom, GarbageService garbage, LogService log) {
 
         BotState bs = botState(ai);
 
@@ -816,6 +830,22 @@ public class BotApp {
                 String item = args.has("item") ? args.get("item").getAsString() : "";
                 return garbage.classify(item);
             }));
+
+        // ---- 日志统计 ----
+        toolCenter.register(new ToolDefinition("get_today_stats",
+            "获取今日统计数据，包括用户消息数、机器人回复数、平均响应时间、常用工具、活跃用户数。",
+            Map.of(),
+            args -> log.getTodayStats()));
+
+        toolCenter.register(new ToolDefinition("get_user_history",
+            "查询当前用户的消息历史记录。当用户说「查看历史」「历史记录」等时调用。",
+            Map.of(
+                "limit", Map.of("type", "integer", "description", "返回条数，默认20")
+            ),
+            args -> {
+                int limit = args.has("limit") ? args.get("limit").getAsInt() : 20;
+                return log.getUserHistory(ToolCenter.currentUserId(), limit);
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -999,6 +1029,7 @@ public class BotApp {
                                      ImageGenService imageGen, NewsService news,
                                      FinanceService finance,
                                      WebReaderService webReader,
+                                     LogService log,
                                      BotMessage msg) {
         String userId = msg.userId();
         String text = msg.voiceText();
@@ -1009,7 +1040,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, userId, text, true);
+        processTextMessage(bot, ai, tts, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, log, userId, text, true);
     }
 
     // ---- 工具方法 ----

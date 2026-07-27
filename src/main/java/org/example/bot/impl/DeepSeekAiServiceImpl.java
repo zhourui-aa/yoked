@@ -151,9 +151,15 @@ public class DeepSeekAiServiceImpl implements AiService {
                 }
 
                 // 记录 assistant 的 tool_calls 到对话
-                builder.addMessage(ChatCompletionAssistantMessageParam.builder()
-                        .toolCalls(message.toolCalls().orElse(List.of()))
-                        .build());
+                try {
+                    builder.addMessage(ChatCompletionAssistantMessageParam.builder()
+                            .toolCalls(message.toolCalls().orElse(List.of()))
+                            .build());
+                } catch (Exception e) {
+                    System.err.println("[AI] ❌ 构建 assistant tool_calls 消息失败: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage());
+                    return null;
+                }
 
                 // 执行本轮所有工具
                 for (ChatCompletionMessageToolCall tc : toolCalls) {
@@ -170,16 +176,34 @@ public class DeepSeekAiServiceImpl implements AiService {
                         ? executor.apply(args)
                         : "工具 " + funcName + " 未注册执行器";
 
-                    builder.addMessage(ChatCompletionToolMessageParam.builder()
-                            .toolCallId(funcCall.id())
-                            .content(result)
-                            .build());
+                    try {
+                        builder.addMessage(ChatCompletionToolMessageParam.builder()
+                                .toolCallId(funcCall.id())
+                                .content(result)
+                                .build());
+                    } catch (Exception e) {
+                        System.err.println("[AI] ❌ 构建工具结果消息失败 tool=" + funcName
+                            + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+                        return null;
+                    }
                 }
 
                 // 继续对话 — AI 可能再调工具或返回最终文本
-                builder.model(MODEL);
-                message = client.chat().completions().create(builder.build())
-                        .choices().get(0).message();
+                try {
+                    builder.model(MODEL);
+                    message = client.chat().completions().create(builder.build())
+                            .choices().get(0).message();
+                } catch (Exception e) {
+                    String msg = "[AI] ❌ 第二轮到 API 调用失败: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage();
+                    Throwable c = e.getCause();
+                    while (c != null) {
+                        msg += " ← " + c.getClass().getSimpleName() + ": " + c.getMessage();
+                        c = c.getCause();
+                    }
+                    System.err.println(msg);
+                    return null;
+                }
             }
 
             // 超过最大轮次 — 返回最后一条消息（不含 tool_calls 的）
@@ -188,7 +212,13 @@ public class DeepSeekAiServiceImpl implements AiService {
             return reply;
 
         } catch (Exception e) {
-            System.err.println("[AI] ❌ Function Calling 失败: " + e.getMessage());
+            String msg = e.getClass().getSimpleName() + ": " + e.getMessage();
+            Throwable cause = e.getCause();
+            while (cause != null) {
+                msg += " ← " + cause.getClass().getSimpleName() + ": " + cause.getMessage();
+                cause = cause.getCause();
+            }
+            System.err.println("[AI] ❌ Function Calling 失败: " + msg);
             return null;
         }
     }

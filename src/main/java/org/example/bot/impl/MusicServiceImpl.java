@@ -14,7 +14,6 @@ import java.time.Duration;
 public class MusicServiceImpl implements MusicService {
 
     private final String baseUrl;
-    private final String apiKey;
 
     private static final HttpClient CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
@@ -22,15 +21,12 @@ public class MusicServiceImpl implements MusicService {
 
     public MusicServiceImpl() {
         String url = ConfigUtil.get("music.api.url", "MUSIC_API_URL");
-        this.apiKey = ConfigUtil.get("music.api.key", "MUSIC_API_KEY");
-
         if (url == null || url.isBlank()) {
             this.baseUrl = "https://api.jimsdeng.eu.org";
-            System.out.println("[音乐] ⚠ 未配置 music.api.url，使用默认 API");
         } else {
             this.baseUrl = url.strip();
-            System.out.println("[音乐] ✅ 音乐服务已就绪（API: " + baseUrl + "）");
         }
+        System.out.println("[音乐] 音乐搜索服务已就绪（API: " + baseUrl + "）");
     }
 
     private String searchUrl(String keyword) {
@@ -143,6 +139,7 @@ public class MusicServiceImpl implements MusicService {
         return resp.body();
     }
 
+    @Override
     public byte[] downloadSong(String audioUrl) throws Exception {
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(audioUrl))

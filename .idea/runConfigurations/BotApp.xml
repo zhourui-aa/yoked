@@ -1,8 +1,8 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="BotApp" type="Application" factoryName="Application">
+  <configuration default="false" name="BotApp" type="Application" factoryName="Application" activateToolWindowBeforeRun="false">
     <option name="MAIN_CLASS_NAME" value="org.example.bot.BotApp" />
     <module name="wechatTest1" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="VM_PARAMETERS" value="--enable-native-access=ALL-UNNAMED" />
     <extension name="coverage">
       <pattern>
         <option name="PATTERN" value="org.example.bot.*" />

@@ -71,8 +71,7 @@ public class ToolCenter {
                            Map<String, Function<JsonObject, String>> executors,
                            String userId) {
         currentUserId.set(userId);
-        try {
-            for (ToolDefinition def : registry) {
+        for (ToolDefinition def : registry) {
                 if (!def.isAvailable(userId)) {
                     continue;
                 }
@@ -83,9 +82,6 @@ public class ToolCenter {
                 tools.add(toFunctionDefinition(def));
                 executors.put(def.name(), def.executor());
             }
-        } finally {
-            currentUserId.remove();
-        }
     }
 
     // ==================== 查询 ====================

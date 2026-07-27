@@ -21,6 +21,10 @@ import java.util.regex.Pattern;
  */
 public class WebReaderServiceImpl implements WebReaderService {
 
+    public WebReaderServiceImpl() {
+        System.out.println("[网页] 网页读取服务已就绪（文章抓取与摘要）");
+    }
+
     private static final HttpClient HTTP_CLIENT = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NORMAL)

@@ -13,6 +13,13 @@ public interface MusicService {
      */
     String search(String songName, String artist);
 
+    /**
+     * 下载歌曲音频数据。
+     * @param audioUrl 音频地址（由 search 结果解析出的 URL）
+     * @return 音频字节数据
+     */
+    byte[] downloadSong(String audioUrl) throws Exception;
+
     /** 服务是否可用 */
     boolean isAvailable();
 }
