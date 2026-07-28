@@ -22,6 +22,7 @@ public class GameSession {
     private final AiService ai;
     private final Map<String, String> nameById = new LinkedHashMap<>(); // userId → 玩家名
     private final Map<String, String> roleByName = new LinkedHashMap<>(); // 玩家名 → 角色
+    private final Map<String, String> playerBotName = new LinkedHashMap<>(); // 玩家名 → bot名
     private final List<String> history = new ArrayList<>(); // 共享对话历史
     private final String gameUserId = "game-" + System.currentTimeMillis(); // 游戏专用虚拟用户
 
@@ -46,6 +47,16 @@ public class GameSession {
     /** 设置玩家角色（由引擎在 start 时调用） */
     public void setRole(String playerName, String role) {
         roleByName.put(playerName, role);
+    }
+
+    /** 记录玩家使用的 bot 名（用于跨 bot 发消息） */
+    public void setPlayerBot(String playerName, String botName) {
+        playerBotName.put(playerName, botName);
+    }
+
+    /** 获取玩家对应的 bot 名 */
+    public String getPlayerBot(String playerName) {
+        return playerBotName.get(playerName);
     }
 
     /** userId → 玩家名 */

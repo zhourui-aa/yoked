@@ -56,7 +56,16 @@ public class BotCluster {
         addBotInternal(name, false);
     }
 
+    /** 运行时动态添加，登录成功后执行回调（用于大厅自动绑定） */
+    public void addBotDynamic(String name, Runnable onLogin) {
+        addBotInternal(name, false, onLogin);
+    }
+
     private void addBotInternal(String name, boolean countDown) {
+        addBotInternal(name, countDown, null);
+    }
+
+    private void addBotInternal(String name, boolean countDown, Runnable onLogin) {
         ILinkBot bot = ILinkBot.create(name);
         bots.add(bot);
         if (handler != null) {
@@ -80,6 +89,7 @@ public class BotCluster {
                 bot.login();
                 bot.startPolling();
                 System.out.println("[BotCluster] " + name + " 🟢 已上线");
+                if (onLogin != null) onLogin.run();
             } catch (Exception e) {
                 System.err.println("[BotCluster] " + name + " 启动失败: " + e.getMessage());
             } finally {

@@ -44,6 +44,7 @@ import game.GameEngine;
 import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
+import game.impl.MurderMysteryEngine;
 import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
@@ -185,6 +186,7 @@ public class BotApp {
 
         // 注册桌游引擎
         GameRegistry.register(new WerewolfEngine());
+        GameRegistry.register(new MurderMysteryEngine());
         System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
@@ -224,7 +226,7 @@ public class BotApp {
                     }
                     // 人齐自动开始
                     if (GameRegistry.hasLobby() && GameRegistry.lobby().allBound()) {
-                        GameCommand.autoStart(bot, fAi, GameRegistry.lobby());
+                        GameCommand.autoStart(bot, fAi, GameRegistry.lobby(), cluster);
                     }
                 }
             }
@@ -301,8 +303,15 @@ public class BotApp {
         if (GameRegistry.isRunning()) {
             GameSession gs = GameRegistry.session();
             if (gs.playerName(userId) != null || gs.boundUsers().contains(userId)) {
+                String speakerName = gs.playerName(userId);
                 String result = gs.engine().handle(gs, userId, text);
-                if (result == null) result = gs.process(userId, text);
+                if (result == null) {
+                    // 正常发言 → 先广播给其他玩家 → 再调 AI 主持人
+                    if (speakerName != null) {
+                        broadcastPlayerMessage(gs, speakerName, text, bot);
+                    }
+                    result = gs.process(userId, text);
+                }
                 if (result != null) {
                     // 解析私信：把【私信:玩家名】内容 分别发给对应玩家
                     dispatchGameReply(bot, gs, result, userId);
@@ -1193,28 +1202,85 @@ public class BotApp {
 
     // ---- 工具方法 ----
 
-    /** 解析游戏回复中的【私信:玩家名】标签，分别发送；公开部分发给发言者 */
-    private static void dispatchGameReply(ILinkBot bot, GameSession gs, String reply, String speakerId) {
+    /** 解析游戏回复中的【私信:玩家名】标签，通过对应玩家的 bot 发送 */
+    private static void dispatchGameReply(ILinkBot speakerBot, GameSession gs, String reply, String speakerId) {
         StringBuilder pub = new StringBuilder();
+        String privWho = null;
+        StringBuilder privMsg = new StringBuilder();
+
         for (String line : reply.split("\n")) {
             if (line.startsWith("【私信:") && line.contains("】")) {
-                int end = line.indexOf("】");
-                String who = line.substring(4, end);
-                String msg = line.substring(end + 1).strip();
-                String uid = gs.getUserId(who);
-                if (uid != null) {
-                    bot.sendText(uid, "📨 " + msg);
-                    System.out.println("[游戏:私信] → " + who + ": " + msg);
+                // 发送上一个私信块
+                if (privWho != null && !privMsg.isEmpty()) {
+                    sendPrivate(privWho, privMsg.toString().strip(), gs, speakerBot);
+                    privMsg.setLength(0);
                 }
+                int end = line.indexOf("】");
+                privWho = cleanPlayerName(line.substring(4, end));
+                String tail = line.substring(end + 1).strip();
+                if (!tail.isEmpty()) privMsg.append(tail).append("\n");
+            } else if (privWho != null) {
+                privMsg.append(line).append("\n");
             } else {
                 pub.append(line).append("\n");
             }
         }
+        // 最后一个私信块
+        if (privWho != null && !privMsg.isEmpty()) {
+            sendPrivate(privWho, privMsg.toString().strip(), gs, speakerBot);
+        }
+
         String pubStr = pub.toString().strip();
         if (!pubStr.isEmpty()) {
-            bot.sendText(speakerId, pubStr);
-            System.out.println("[游戏:公开] " + pubStr);
+            // 广播：每个玩家用自己对应的 bot 接收
+            for (String name : gs.playerNames()) {
+                String uid = gs.getUserId(name);
+                if (uid == null) continue;
+                String botName = gs.getPlayerBot(name);
+                ILinkBot targetBot = botName != null ? cluster.getBot(botName) : null;
+                if (targetBot != null) {
+                    targetBot.sendText(uid, pubStr);
+                } else {
+                    speakerBot.sendText(uid, pubStr);
+                }
+            }
+            System.out.println("[游戏:广播] " + pubStr);
         }
+    }
+
+    /** 去除玩家名中 AI 误加的括号内容，如 "张三（警察）" → "张三" */
+    private static String cleanPlayerName(String raw) {
+        int paren = raw.indexOf('（');
+        if (paren < 0) paren = raw.indexOf('(');
+        return paren > 0 ? raw.substring(0, paren).strip() : raw.strip();
+    }
+
+    /** 发送私信：通过玩家的 bot（存储在 GameSession 中），fallback 到发言者 bot */
+    private static void sendPrivate(String who, String msg, GameSession gs, ILinkBot speakerBot) {
+        String uid = gs.getUserId(who);
+        if (uid == null) return;
+        String botName = gs.getPlayerBot(who);
+        ILinkBot target = botName != null ? cluster.getBot(botName) : null;
+        if (target != null) {
+            target.sendText(uid, "📨 " + msg);
+        } else {
+            speakerBot.sendText(uid, "📨 " + msg);
+        }
+        System.out.println("[游戏:私信] → " + who + ": " + msg.substring(0, Math.min(60, msg.length())) + "...");
+    }
+
+    /** 广播玩家发言给其他玩家（不包含说话者自己） */
+    private static void broadcastPlayerMessage(GameSession gs, String speakerName, String text,
+                                                ILinkBot speakerBot) {
+        for (String name : gs.playerNames()) {
+            if (name.equals(speakerName)) continue; // 跳过说话者自己
+            String uid = gs.getUserId(name);
+            if (uid == null) continue;
+            String botName = gs.getPlayerBot(name);
+            ILinkBot target = botName != null ? cluster.getBot(botName) : speakerBot;
+            target.sendText(uid, "💬 " + speakerName + "：" + text);
+        }
+        System.out.println("[游戏:广播发言] " + speakerName + "：" + text);
     }
 
     /** 从 AiService 中获取 BotState 缓存 */
