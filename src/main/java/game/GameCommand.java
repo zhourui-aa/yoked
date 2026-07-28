@@ -20,7 +20,75 @@ public class GameCommand {
                                    BotCluster cluster) {
 
         // ═══════════════════════════════════════════
-        // ① "桌游模式" → 展示菜单
+        // ⓪ 结束游戏 / 退出游戏
+        // ═══════════════════════════════════════════
+        if (GameRegistry.isRunning() && isQuitCommand(text)) {
+            String gameName = GameRegistry.session().engine().name();
+            GameRegistry.stop();
+            bot.sendText(userId, "🚪 已退出「" + gameName + "」。");
+            return true;
+        }
+
+        // 游戏进行中时，拒绝启动新游戏
+        if (GameRegistry.isRunning()) {
+            bot.sendText(userId, "当前已有游戏进行中，请先输入「结束游戏」退出。");
+            return true;
+        }
+
+        // ═══════════════════════════════════════════
+        // ① "玩 游戏名" / "玩 游戏名 人数" → 精确前缀
+        // ═══════════════════════════════════════════
+        if (text.startsWith("玩")) {
+            String rest = text.substring(1).strip();
+            String[] parts = rest.split("\\s+");
+            if (parts.length >= 1) {
+                var engine = GameRegistry.get(parts[0]);
+                if (engine != null) {
+                    if (engine.minPlayers() == 1 && engine.maxPlayers() == 1) {
+                        return startSinglePlayerGame(bot, ai, userId, engine);
+                    }
+                    if (parts.length >= 2) {
+                        try {
+                            int count = Integer.parseInt(parts[1]);
+                            if (count >= engine.minPlayers() && count <= engine.maxPlayers()) {
+                                gameName = parts[0];
+                                totalSlots = count;
+                                step = "codename";
+                                bot.sendText(userId, "✅ 「" + gameName + "」" + count + "人局。\n"
+                                    + "请输入你的代号（游戏内显示的名字），例如：代号 周瑞");
+                                return true;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
+                    step = "menu";
+                    gameName = parts[0];
+                    bot.sendText(userId, "🎮 「" + parts[0] + "」已选择。\n"
+                        + "请输入人数（" + engine.minPlayers() + "-" + engine.maxPlayers() + "人），例如：" + parts[0] + " " + engine.minPlayers());
+                    return true;
+                }
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // ② 自然语言触发（含"想玩"等意图词）
+        // ═══════════════════════════════════════════
+        String matchedGame = matchGameName(text);
+        if (matchedGame != null) {
+            var engine = GameRegistry.get(matchedGame);
+            if (engine != null) {
+                if (engine.minPlayers() == 1 && engine.maxPlayers() == 1) {
+                    return startSinglePlayerGame(bot, ai, userId, engine);
+                }
+                step = "menu";
+                gameName = matchedGame;
+                bot.sendText(userId, "🎮 「" + matchedGame + "」已选择。\n"
+                    + "请输入人数（" + engine.minPlayers() + "-" + engine.maxPlayers() + "人），例如：" + matchedGame + " " + engine.minPlayers());
+                return true;
+            }
+        }
+
+        // ═══════════════════════════════════════════
+        // ③ "桌游模式" → 展示菜单
         // ═══════════════════════════════════════════
         if (text.equals("桌游模式") || text.equals("开启桌游") || text.equals("桌游")) {
             step = "menu";
@@ -32,7 +100,7 @@ public class GameCommand {
         }
 
         // ═══════════════════════════════════════════
-        // ② "狼人杀 6" → 选游戏+人数，等待代号
+        // ④ "狼人杀 6" → 选游戏+人数，等待代号
         // ═══════════════════════════════════════════
         if ("menu".equals(step) || (GameRegistry.hasLobby() && GameRegistry.lobby().creatorId.equals(userId))) {
             // 解析 "游戏名 人数"
@@ -57,7 +125,7 @@ public class GameCommand {
         }
 
         // ═══════════════════════════════════════════
-        // ③ "代号 周瑞"（或直接"周瑞"） → 创建者加入
+        // ⑤ "代号 周瑞"（或直接"周瑞"） → 创建者加入
         // ═══════════════════════════════════════════
         if ("codename".equals(step) && !text.startsWith("加入") && !text.startsWith("添加")) {
             String name = text;
@@ -81,7 +149,7 @@ public class GameCommand {
         }
 
         // ═══════════════════════════════════════════
-        // ④ "加入 xxx"（或"加入xxx"） → 弹二维码
+        // ⑥ "加入 xxx"（或"加入xxx"） → 弹二维码
         // ═══════════════════════════════════════════
         if ("lobby".equals(step) && (text.startsWith("加入") || text.startsWith("添加"))) {
             var lobby = GameRegistry.lobby();
@@ -108,7 +176,7 @@ public class GameCommand {
         }
 
         // ═══════════════════════════════════════════
-        // ⑤ "开始" → 人齐或手动启动
+        // ⑦ "开始" → 人齐或手动启动
         // ═══════════════════════════════════════════
         if ("lobby".equals(step) && text.equals("开始")) {
             var lobby = GameRegistry.lobby();
@@ -302,5 +370,63 @@ public class GameCommand {
         int paren = raw.indexOf('（');
         if (paren < 0) paren = raw.indexOf('(');
         return paren > 0 ? raw.substring(0, paren).strip() : raw.strip();
+    }
+
+    // ═══════════════════════════════════════════
+    // 单人游戏快速启动
+    // ═══════════════════════════════════════════
+
+    /** 启动单人游戏（跳过 lobby 流程） */
+    private static boolean startSinglePlayerGame(ILinkBot bot, AiService ai, String userId, GameEngine engine) {
+        String playerName = "玩家";
+        GameRegistry.start(engine, ai, new String[]{playerName});
+        var session = GameRegistry.session();
+        session.bindUser(userId, playerName);
+
+        String announce = engine.start(session);
+        String reply = session.prompt(announce);
+
+        bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + reply);
+        System.out.println("[游戏] " + engine.name() + " 单人游戏开始");
+        return true;
+    }
+
+    // ═══════════════════════════════════════════
+    // 游戏名匹配
+    // ═══════════════════════════════════════════
+
+    /**
+     * 从自然语言中匹配游戏名（非精确前缀，用于"我想玩海龟汤"等场景）。
+     */
+    public static String matchGameName(String text) {
+        if (text == null || text.isBlank()) return null;
+
+        String stripped = text.replaceAll("\\s+", "");
+        if (stripped.contains("不想玩") || stripped.contains("别玩")) {
+            return null;
+        }
+
+        for (String name : GameRegistry.gameNames()) {
+            if (stripped.contains("想玩" + name)) {
+                return name;
+            }
+        }
+
+        for (String name : GameRegistry.gameNames()) {
+            if (stripped.contains("玩" + name)) {
+                return name;
+            }
+        }
+
+        return null;
+    }
+
+    /** 判断是否为退出游戏的指令 */
+    public static boolean isQuitCommand(String text) {
+        if (text == null) return false;
+        String t = text.trim();
+        return t.equals("结束游戏") || t.equals("退出游戏")
+            || t.equals("不玩了") || t.equals("退出")
+            || t.equals("结束") || t.equalsIgnoreCase("quit");
     }
 }

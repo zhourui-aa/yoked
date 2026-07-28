@@ -1,5 +1,7 @@
 package game;
 
+import game.impl.TurtleSoupEngine;
+import game.impl.WerewolfEngine;
 import org.example.bot.service.AiService;
 
 import java.util.*;
@@ -12,6 +14,12 @@ public class GameRegistry {
     private static final Map<String, GameEngine> engines = new LinkedHashMap<>();
     private static volatile GameLobby lobby;
     private static volatile GameSession running;
+
+    // 自动注册所有内置引擎，无需在 BotApp 中手动注册
+    static {
+        register(new WerewolfEngine());
+        register(new TurtleSoupEngine());
+    }
 
     // ==================== 引擎 ====================
 
@@ -27,6 +35,11 @@ public class GameRegistry {
     }
 
     public static GameEngine get(String name) { return engines.get(name); }
+
+    /** 返回所有已注册游戏的名称列表 */
+    public static List<String> gameNames() {
+        return new ArrayList<>(engines.keySet());
+    }
 
     // ==================== 大厅 ====================
 
