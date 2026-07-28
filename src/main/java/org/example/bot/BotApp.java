@@ -214,6 +214,29 @@ public class BotApp {
             String userId = msg.userId();
             ILinkBot bot = BotCluster.current();
 
+            // 游戏大厅自动绑定 + 通知
+            if (GameRegistry.hasLobby() && bot != null) {
+                if (GameRegistry.lobby().bind(bot.name(), userId)) {
+                    String notify = GameCommand.onBotBound(bot.name());
+                    System.out.println("[大厅] " + bot.name() + " 已扫码");
+                    if (notify != null) {
+                        bot.sendText(GameRegistry.lobby().creatorId, notify);
+                    }
+                    // 人齐自动开始
+                    if (GameRegistry.hasLobby() && GameRegistry.lobby().allBound()) {
+                        GameCommand.autoStart(bot, fAi, GameRegistry.lobby());
+                    }
+                }
+            }
+
+            // 大厅中非创建者的已绑定玩家→回复等待状态（创建者放行，需处理"加入"命令）
+            if (GameRegistry.hasLobby()
+                && !userId.equals(GameRegistry.lobby().creatorId)
+                && GameRegistry.lobby().boundMap().containsValue(userId)) {
+                bot.sendText(userId, "🏠 你已加入游戏，等待开始...");
+                return;
+            }
+
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
@@ -281,8 +304,8 @@ public class BotApp {
                 String result = gs.engine().handle(gs, userId, text);
                 if (result == null) result = gs.process(userId, text);
                 if (result != null) {
-                    System.out.println("[回复] " + result);
-                    bot.sendTextWithTyping(userId, result, 300L);
+                    // 解析私信：把【私信:玩家名】内容 分别发给对应玩家
+                    dispatchGameReply(bot, gs, result, userId);
                 }
                 return;
             }
@@ -395,7 +418,7 @@ public class BotApp {
         }
 
         // 桌游命令
-        if (GameCommand.handle(bot, ai, userId, text)) return true;
+        if (GameCommand.handle(bot, ai, userId, text, cluster)) return true;
 
         return false;
     }
@@ -1169,6 +1192,30 @@ public class BotApp {
     }
 
     // ---- 工具方法 ----
+
+    /** 解析游戏回复中的【私信:玩家名】标签，分别发送；公开部分发给发言者 */
+    private static void dispatchGameReply(ILinkBot bot, GameSession gs, String reply, String speakerId) {
+        StringBuilder pub = new StringBuilder();
+        for (String line : reply.split("\n")) {
+            if (line.startsWith("【私信:") && line.contains("】")) {
+                int end = line.indexOf("】");
+                String who = line.substring(4, end);
+                String msg = line.substring(end + 1).strip();
+                String uid = gs.getUserId(who);
+                if (uid != null) {
+                    bot.sendText(uid, "📨 " + msg);
+                    System.out.println("[游戏:私信] → " + who + ": " + msg);
+                }
+            } else {
+                pub.append(line).append("\n");
+            }
+        }
+        String pubStr = pub.toString().strip();
+        if (!pubStr.isEmpty()) {
+            bot.sendText(speakerId, pubStr);
+            System.out.println("[游戏:公开] " + pubStr);
+        }
+    }
 
     /** 从 AiService 中获取 BotState 缓存 */
     private static BotState botState(AiService ai) {

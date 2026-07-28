@@ -1,90 +1,181 @@
 package game;
 
+import org.example.bot.ilink.BotCluster;
 import org.example.bot.ilink.ILinkBot;
 import org.example.bot.service.AiService;
 
 /**
- * 桌游命令处理 — 从 BotApp 的 tryHandleLocalCommand 中调用。
+ * 桌游命令处理。
+ *
+ * <p>流程：桌游模式 → 狼人杀 人数 → 代号 xxx → 加入 xxx（弹码）→ 扫码 → 反复加入 → 人齐自动开始
  */
 public class GameCommand {
 
-    /** 处理桌游相关命令，匹配则返回 true */
-    public static boolean handle(ILinkBot bot, AiService ai, String userId, String text) {
+    // 当前状态：null=空闲, "menu"=已展示菜单, "codename"=等待输入代号, "lobby"=等待加入
+    private static String step = null;
+    private static String gameName = null;
+    private static int totalSlots = 0;
 
-        // "开启桌游" / "桌游列表"
-        if (text.equals("开启桌游") || text.equals("桌游模式") || text.equals("桌游列表")) {
-            bot.sendText(userId, "🎮 可玩的桌游：" + GameRegistry.listGames()
-                + "\n\n输入「玩 游戏名 你的昵称 玩家2 玩家3 ...」开始游戏。\n单人游戏只需：玩 游戏名 你的昵称");
+    public static boolean handle(ILinkBot bot, AiService ai, String userId, String text,
+                                   BotCluster cluster) {
+
+        // ═══════════════════════════════════════════
+        // ① "桌游模式" → 展示菜单
+        // ═══════════════════════════════════════════
+        if (text.equals("桌游模式") || text.equals("开启桌游")) {
+            step = "menu";
+            var sb = new StringBuilder();
+            sb.append("🎮 桌游大厅\n\n可玩：").append(GameRegistry.listGames());
+            sb.append("\n\n请输入「游戏名 人数」开始，例如：狼人杀 6");
+            bot.sendText(userId, sb.toString());
             return true;
         }
 
-        // "加入 游戏名 你的昵称" — 加入进行中的多人游戏
-        if (text.startsWith("加入 ") && GameRegistry.isRunning()) {
-            String name = text.substring(3).strip();
-            if (name.isBlank()) {
-                bot.sendText(userId, "请输入你的昵称，例如：加入 张三");
-                return true;
+        // ═══════════════════════════════════════════
+        // ② "狼人杀 6" → 选游戏+人数，等待代号
+        // ═══════════════════════════════════════════
+        if ("menu".equals(step) || (GameRegistry.hasLobby() && GameRegistry.lobby().creatorId.equals(userId))) {
+            // 解析 "游戏名 人数"
+            String[] parts = text.split("\\s+");
+            if (parts.length == 2) {
+                var engine = GameRegistry.get(parts[0]);
+                if (engine != null) {
+                    int count;
+                    try { count = Integer.parseInt(parts[1]); } catch (NumberFormatException e) { return false; }
+                    if (count >= engine.minPlayers() && count <= engine.maxPlayers()) {
+                        gameName = parts[0];
+                        totalSlots = count;
+                        step = "codename";
+                        bot.sendText(userId, "✅ 「" + gameName + "」" + count + "人局。\n"
+                            + "请输入你的代号（游戏内显示的名字），例如：代号 周瑞");
+                        return true;
+                    }
+                    bot.sendText(userId, gameName + " 需要 " + engine.minPlayers() + "-" + engine.maxPlayers() + " 人。");
+                    return true;
+                }
             }
-            GameRegistry.session().bindUser(userId, name);
-            bot.sendText(userId, "✅ " + name + " 已加入「" + GameRegistry.session().engine().name() + "」！");
+        }
+
+        // ═══════════════════════════════════════════
+        // ③ "代号 周瑞"（或直接"周瑞"） → 创建者加入
+        // ═══════════════════════════════════════════
+        if ("codename".equals(step) && !text.startsWith("加入") && !text.startsWith("添加")) {
+            String name = text;
+            if (name.startsWith("代号")) {
+                name = name.substring(2).strip();
+            }
+            name = name.strip();
+            if (name.isBlank()) { bot.sendText(userId, "请输入你的代号，例如：周瑞"); return true; }
+            if (name.length() > 8) { bot.sendText(userId, "代号最多8个字。"); return true; }
+
+            var engine = GameRegistry.get(gameName);
+            GameRegistry.createLobby(engine, totalSlots, userId);
+            var lobby = GameRegistry.lobby();
+            lobby.bindDirect(name, userId);
+            step = "lobby";
+
+            bot.sendText(userId, "🎮 「" + name + "」已加入「" + gameName + "」！"
+                + "（1/" + totalSlots + "）\n"
+                + "现在请输入「加入 昵称」让其他人扫码加入。");
             return true;
         }
 
-        // "玩 游戏名 玩家列表"
-        if (text.startsWith("玩 ")) {
-            String rest = text.substring(2).strip();
-            String[] parts = rest.split("\\s+");
-            if (parts.length < 2) {
-                bot.sendText(userId, "请指定游戏名和至少你的昵称。\n单人游戏：玩 海龟汤 张三\n多人游戏：玩 狼人杀 张三 李四 王五 ...");
-                return true;
-            }
-            String gameName = parts[0];
-            GameEngine engine = GameRegistry.get(gameName);
-            if (engine == null) {
-                bot.sendText(userId, "没有「" + gameName + "」这个游戏。\n" + GameRegistry.listGames());
-                return true;
-            }
+        // ═══════════════════════════════════════════
+        // ④ "加入 xxx"（或"加入xxx"） → 弹二维码
+        // ═══════════════════════════════════════════
+        if ("lobby".equals(step) && (text.startsWith("加入") || text.startsWith("添加"))) {
+            var lobby = GameRegistry.lobby();
+            if (lobby == null || !userId.equals(lobby.creatorId)) return false;
 
-            String[] playerNames = new String[parts.length - 1];
-            System.arraycopy(parts, 1, playerNames, 0, playerNames.length);
-            int count = playerNames.length;
+            String name = text;
+            if (name.startsWith("加入")) name = name.substring(2).strip();
+            else if (name.startsWith("添加")) name = name.substring(2).strip();
+            name = name.strip();
+            if (name.isBlank()) { bot.sendText(userId, "请输入昵称，例如：加入 张三 或 加入张三"); return true; }
 
-            if (count < engine.minPlayers()) {
-                bot.sendText(userId, gameName + " 至少需要" + engine.minPlayers() + "人，当前只有" + count + "人。");
-                return true;
-            }
-            if (count > engine.maxPlayers()) {
-                bot.sendText(userId, gameName + " 最多支持" + engine.maxPlayers() + "人，当前有" + count + "人。");
+            if (!lobby.reserve(name)) {
+                if (lobby.totalJoined() >= lobby.slots)
+                    bot.sendText(userId, "❌ 人数已满。输入「开始」启动游戏。");
+                else
+                    bot.sendText(userId, "❌「" + name + "」已被占用。");
                 return true;
             }
 
-            // 创建游戏会话
-            GameRegistry.start(engine, ai, playerNames);
-            GameSession session = GameRegistry.session();
-
-            // 发起人自动绑定第一个玩家
-            session.bindUser(userId, playerNames[0]);
-
-            // 引擎初始化
-            String announcement = engine.start(session);
-            bot.sendText(userId, "🎮 「" + gameName + "」开始！" + count + "位玩家。\n" + announcement);
-
-            // 多人游戏提示还需加入
-            if (count > 1) {
-                bot.sendText(userId, "📢 其他玩家请发送「加入 你的昵称」进入游戏。");
-            }
-            System.out.println("[游戏] " + gameName + " 开始，" + count + "人");
+            cluster.addBotDynamic(name);
+            bot.sendText(userId, "📱 「" + name + "」的二维码已打印在终端，等待扫码..."
+                + "（" + lobby.totalJoined() + "/" + lobby.slots + "）");
             return true;
         }
 
-        // "结束游戏"
-        if (text.equals("结束游戏") && GameRegistry.isRunning()) {
-            String gn = GameRegistry.session().engine().name();
-            GameRegistry.stop();
-            bot.sendText(userId, "🛑 已结束「" + gn + "」。");
-            return true;
+        // ═══════════════════════════════════════════
+        // ⑤ "开始" → 人齐或手动启动
+        // ═══════════════════════════════════════════
+        if ("lobby".equals(step) && text.equals("开始")) {
+            var lobby = GameRegistry.lobby();
+            if (lobby == null) return false;
+            if (!lobby.allBound()) {
+                bot.sendText(userId, "还有 " + lobby.pendingCount() + " 人未扫码，请等待。");
+                return true;
+            }
+            return startGame(bot, ai, lobby);
         }
 
         return false;
+    }
+
+    // ═══════════════════════════════════════════
+    // 游戏大厅消息处理（由 BotApp handler 调用）
+    // ═══════════════════════════════════════════
+
+    /** 人齐后自动开始（由 BotApp handler 检测到时调用） */
+    public static void autoStart(ILinkBot bot, AiService ai, GameRegistry.GameLobby lobby) {
+        startGame(bot, ai, lobby);
+    }
+
+    /** 检测到游戏 bot 扫码后回调，返回大厅状态消息 */
+    public static String onBotBound(String botName) {
+        var lobby = GameRegistry.lobby();
+        if (lobby == null) return null;
+        int n = lobby.totalJoined();
+        if (n >= lobby.slots) {
+            // 人齐，自动开始
+            return "🎉 玩家" + n + "「" + botName + "」已准备！（" + n + "/" + lobby.slots + "）\n"
+                + "人数已齐，游戏即将开始！";
+        }
+        return "✅ 玩家" + n + "「" + botName + "」已准备！（" + n + "/" + lobby.slots + "）";
+    }
+
+    /** 启动游戏 */
+    private static boolean startGame(ILinkBot bot, AiService ai, GameRegistry.GameLobby lobby) {
+        String[] names = lobby.toPlayerNames();
+        GameRegistry.dismissLobby();
+        GameRegistry.start(lobby.engine, ai, names);
+        var session = GameRegistry.session();
+        for (var e : lobby.boundMap().entrySet())
+            session.bindUser(e.getValue(), e.getKey());
+
+        String announce = lobby.engine.start(session);
+        // 调 DeepSeek 执行角色分配
+        String reply = session.prompt(announce);
+        // 解析私信并分发
+        for (String line : reply.split("\n")) {
+            if (line.startsWith("【私信:") && line.contains("】")) {
+                int end = line.indexOf("】");
+                String who = line.substring(4, end);
+                String msg = line.substring(end + 1).strip();
+                String uid = session.getUserId(who);
+                if (uid != null) {
+                    bot.sendText(uid, "📨 " + msg);
+                    System.out.println("[游戏:私信] → " + who + ": " + msg);
+                }
+            }
+        }
+        // 公开部分发给创建者
+        bot.sendText(lobby.creatorId, "🎮 「" + lobby.engine.name() + "」开始！"
+            + names.length + "位玩家。角色已私信告知。");
+        step = null;
+        gameName = null;
+        System.out.println("[游戏] " + lobby.engine.name() + " 开始，" + names.length + "人");
+        return true;
     }
 }

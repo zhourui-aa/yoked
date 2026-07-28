@@ -90,9 +90,11 @@ public class GameSession {
         String tag = name + (role != null ? "(" + role + ")" : "");
         history.add("[" + tag + "] " + text);
 
-        // 构建完整上下文：系统提示 + 玩家名单 + 角色分配 + 对话历史
+        // 构建完整上下文：系统提示 + 引擎状态 + 玩家名单 + 对话历史
         StringBuilder ctx = new StringBuilder();
         ctx.append(engine.systemPrompt()).append("\n\n");
+        String state = engine.stateContext();
+        if (!state.isEmpty()) ctx.append(state).append("\n\n");
         ctx.append("当前玩家：\n");
         for (String n : playerNames()) {
             String r = roleByName.get(n);
@@ -116,11 +118,19 @@ public class GameSession {
         return reply;
     }
 
-    /** GameEngine 直接调用 DeepSeek（不分发到玩家），用于夜晚阶段等内部逻辑 */
+    /** GameEngine 直接调用 DeepSeek，用于夜晚阶段等内部逻辑 */
     public String prompt(String promptText) {
         String reply = ai.chat(gameUserId, promptText);
         history.add("[系统] " + promptText + "\n[主持人] " + reply);
         return reply;
+    }
+
+    /** 玩家名 → userId（供外部发私信用） */
+    public String getUserId(String playerName) {
+        for (var e : nameById.entrySet()) {
+            if (e.getValue().equals(playerName)) return e.getKey();
+        }
+        return null;
     }
 
     /** 清空 GameUserId 的对话历史（避免跨游戏污染） */
