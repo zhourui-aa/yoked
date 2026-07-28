@@ -42,6 +42,7 @@ import org.example.bot.impl.GarbageServiceImpl;
 import game.GameCommand;
 import game.GameEngine;
 import game.GameRegistry;
+import game.GameSession;
 import game.impl.WerewolfEngine;
 import org.example.bot.service.DatabaseService;
 import org.example.bot.impl.SqliteDatabaseServiceImpl;
@@ -262,6 +263,20 @@ public class BotApp {
                                            FinanceService finance,
                                            WebReaderService webReader,
                                            String userId, String text, boolean forceVoice) {
+        // ⓪ 游戏模式 — 如果正在玩游戏且用户是玩家，消息路由到游戏会话
+        if (GameRegistry.isRunning()) {
+            GameSession gs = GameRegistry.session();
+            if (gs.playerName(userId) != null || gs.boundUsers().contains(userId)) {
+                String result = gs.engine().handle(gs, userId, text);
+                if (result == null) result = gs.process(userId, text);
+                if (result != null) {
+                    System.out.println("[回复] " + result);
+                    bot.sendTextWithTyping(userId, result, 300L);
+                }
+                return;
+            }
+        }
+
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
 
@@ -369,7 +384,7 @@ public class BotApp {
         }
 
         // 桌游命令
-        if (GameCommand.handle(bot, userId, text)) return true;
+        if (GameCommand.handle(bot, ai, userId, text)) return true;
 
         return false;
     }

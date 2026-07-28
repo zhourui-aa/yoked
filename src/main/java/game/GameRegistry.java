@@ -1,15 +1,17 @@
 package game;
 
+import org.example.bot.service.AiService;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 游戏注册中心 — 管理可用的桌游和进行中的对局。
+ * 游戏注册中心 — 管理可用的桌游引擎和正在进行中的游戏会话。
  */
 public class GameRegistry {
 
     private static final Map<String, GameEngine> engines = new LinkedHashMap<>();
-    private static volatile GameEngine running;
+    private static volatile GameSession running;
 
     /** 注册一个桌游引擎 */
     public static void register(GameEngine engine) {
@@ -34,18 +36,17 @@ public class GameRegistry {
 
     /** 当前是否有一局正在运行 */
     public static boolean isRunning() {
-        return running != null && !running.isOver();
+        return running != null && !running.engine().isOver();
     }
 
-    /** 获取正在运行的游戏 */
-    public static GameEngine running() {
+    /** 获取当前游戏会话 */
+    public static GameSession session() {
         return running;
     }
 
     /** 开始一局游戏 */
-    public static void start(GameEngine engine, String[] playerNames) {
-        engine.setPlayers(playerNames);
-        running = engine;
+    public static void start(GameEngine engine, AiService ai, String[] playerNames) {
+        running = new GameSession(engine, ai, playerNames);
     }
 
     /** 结束当前游戏 */
