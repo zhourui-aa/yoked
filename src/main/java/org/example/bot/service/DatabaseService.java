@@ -49,8 +49,17 @@ public interface DatabaseService {
     /** 统计当前会话的消息数 */
     int countChats(String userId);
 
+    // ========== 定时任务 ==========
+
+    void saveTask(TaskRecord task);
+    TaskRecord loadTask(String taskId);
+    List<TaskRecord> loadAllTasks();
+    void deleteTask(String taskId);
+
     // ========== 记录类型 ==========
 
     record ChatRecord(String role, String content, long time) {}
     record SessionMeta(String name, String persona) {}
+    record TaskRecord(String id, String userId, String botName, String type,
+                      String cronDelay, String message, long nextFire, long createdAt) {}
 }

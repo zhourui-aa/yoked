@@ -98,18 +98,6 @@ public class SessionManager {
         // 3. 恢复语音模式
         String vm = db.loadUserPref(userId, "voice_mode");
         if ("true".equals(vm)) voiceMode.put(userId, true);
-
-        // 4. 恢复人设（兜底：如果 sessions 表没存，从 user_prefs 恢复）
-        String savedPersona = db.loadUserPref(userId, "persona");
-        if (savedPersona != null && !savedPersona.isBlank()) {
-            String curName = currentSession.get(userId);
-            if (curName != null && sessions.containsKey(userId)) {
-                Session s = sessions.get(userId).get(curName);
-                if (s != null && s.persona.equals(defaultPersona)) {
-                    s.persona = savedPersona;
-                }
-            }
-        }
     }
 
     /** 获取当前会话（没有则创建默认会话） */
@@ -229,11 +217,8 @@ public class SessionManager {
     public synchronized void setPersona(String userId, String persona) {
         Session s = getOrCreate(userId);
         s.persona = persona;
-        // 持久化到 session 的 persona 字段
         String name = currentSession.get(userId);
         if (db != null && name != null) db.saveSessionMeta(userId, name, persona);
-        // 同时保存为默认人设偏好
-        if (db != null) db.saveUserPref(userId, "persona", persona);
     }
 
     /** 查看当前人设 */

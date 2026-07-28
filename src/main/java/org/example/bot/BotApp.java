@@ -44,6 +44,8 @@ import game.GameEngine;
 import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
+import org.example.bot.service.SchedulerService;
+import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
 import org.example.bot.impl.SqliteDatabaseServiceImpl;
 import org.example.bot.tools.ToolCenter;
@@ -124,6 +126,15 @@ public class BotApp {
         // 第 2 步：创建服务
         DatabaseService db = new SqliteDatabaseServiceImpl();
 
+        SchedulerService scheduler = new SchedulerServiceImpl(db);
+        scheduler.setFireHandler((userId, info) -> {
+            ILinkBot b = cluster.getBot(info.botName());
+            if (b != null) {
+                String prefix = info.type().equals("recurring") ? "🔔 定期任务：\n" : "⏰ 定时提醒：\n";
+                b.sendText(userId, prefix + info.message());
+            }
+        });
+
         AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, db);
         WeatherBotService weather = WeatherBotService.create();
 
@@ -177,7 +188,7 @@ public class BotApp {
         System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db, scheduler);
         System.out.println(toolCenter.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
@@ -451,7 +462,7 @@ public class BotApp {
             NewsService news, FinanceService finance,
             WebReaderService webReader, WebSearchService search,
             IdiomService idiom, GarbageService garbage,
-            DatabaseService db) {
+            DatabaseService db, SchedulerService scheduler) {
 
         BotState bs = botState(ai);
 
@@ -910,6 +921,56 @@ public class BotApp {
                 var ssnMgr = ((DeepSeekAiServiceImpl) ai).getSessionManager();
                 ssnMgr.clearCurrent(ToolCenter.currentUserId());
                 return "✅ 已清除 " + count + " 条聊天记录。";
+            }));
+
+        // ---- 定时任务 ----
+        toolCenter.register(new ToolDefinition("schedule_task",
+            "创建定时提醒或定期任务。" +
+            "一次性提醒：「5分钟后提醒我开会」「30秒后叫我」。" +
+            "定期任务：「每天早上8点给我发天气预报」「每周一9点发周报提醒」。" +
+            "输入告知type(once/recurring)、time(一次性=延迟描述如5分钟/1小时，定期=cron如0 8 * * *)、message(提醒内容)。",
+            Map.of(
+                "type", Map.of("type", "string", "description", "once=一次性提醒，recurring=定期重复"),
+                "time", Map.of("type", "string", "description", "一次性=延迟如「5分钟」「1小时」。定期=cron如「0 8 * * *」(每天早上8点)、「0 9 * * 1」(每周一9点)"),
+                "message", Map.of("type", "string", "description", "提醒内容")
+            ),
+            args -> {
+                String type = args.has("type") ? args.get("type").getAsString() : "once";
+                String time = args.has("time") ? args.get("time").getAsString() : "5分钟";
+                String msg = args.has("message") ? args.get("message").getAsString() : "定时提醒";
+                String uid = ToolCenter.currentUserId();
+                ILinkBot current = BotCluster.current();
+                String botName = current != null ? current.name() : "default";
+                String taskId = scheduler.schedule(uid, botName, type, time, msg);
+                String typeLabel = "once".equals(type) ? "定时提醒" : "定期任务";
+                return "⏰ " + typeLabel + "已创建（ID: " + taskId + "）\n"
+                    + "类型：" + ("once".equals(type) ? "一次性" : "定期") + "\n"
+                    + "时间：" + time + "\n"
+                    + "内容：" + msg;
+            }));
+
+        toolCenter.register(new ToolDefinition("list_tasks",
+            "列出当前用户的所有定时任务和定期任务。当用户说「查看定时任务」「有哪些提醒」「我的任务」等时调用。",
+            Map.of(),
+            args -> {
+                var tasks = scheduler.listTasks(ToolCenter.currentUserId());
+                if (tasks.isEmpty()) return "📋 当前没有定时任务。";
+                StringBuilder sb = new StringBuilder("📋 定时任务列表（" + tasks.size() + "个）：\n");
+                for (var t : tasks) {
+                    String typeIcon = "recurring".equals(t.type()) ? "🔁" : "⏰";
+                    sb.append(typeIcon).append(" [").append(t.id()).append("] ")
+                      .append(t.message()).append("\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        toolCenter.register(new ToolDefinition("cancel_task",
+            "取消指定的定时任务。当用户说「取消定时任务」「删除提醒」等时调用。",
+            Map.of("task_id", Map.of("type", "string", "description", "要取消的任务ID")),
+            args -> {
+                String taskId = args.has("task_id") ? args.get("task_id").getAsString() : "";
+                if (taskId.isBlank()) return "请提供要取消的任务ID（可在「查看定时任务」中找到）。";
+                return scheduler.cancel(taskId);
             }));
     }
 

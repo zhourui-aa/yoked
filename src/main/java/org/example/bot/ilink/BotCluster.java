@@ -116,6 +116,11 @@ public class BotCluster {
         }
     }
 
+    /** 按名称查找 bot（供定时任务等后台线程使用） */
+    public ILinkBot getBot(String name) {
+        return bots.stream().filter(b -> b.name().equals(name)).findFirst().orElse(null);
+    }
+
     /** 关闭所有 bot */
     public void closeAll() {
         System.out.println("[BotCluster] 正在关闭所有 bot...");

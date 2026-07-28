@@ -45,8 +45,20 @@ public class SqliteDatabaseServiceImpl implements DatabaseService {
                     PRIMARY KEY (user_id, name)
                 )
                 """);
+            s.execute("""
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    bot_name TEXT NOT NULL DEFAULT 'default',
+                    type TEXT NOT NULL,
+                    cron_delay TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    next_fire INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """);
             s.execute("CREATE INDEX IF NOT EXISTS idx_chat_user ON chat_history(user_id, session_name, time)");
-            System.out.println("[数据库] SQLite 已就绪（yoked.db，3 张表）");
+            System.out.println("[数据库] SQLite 已就绪（yoked.db，4 张表）");
         } catch (Exception e) {
             System.err.println("[数据库] ❌ 初始化失败: " + e.getMessage());
         }
@@ -235,6 +247,66 @@ public class SqliteDatabaseServiceImpl implements DatabaseService {
             System.err.println("[数据库] ❌ 统计聊天失败: " + e.getMessage());
         }
         return 0;
+    }
+
+    // ==================== 定时任务 ====================
+
+    @Override
+    public void saveTask(TaskRecord t) {
+        String sql = "INSERT OR REPLACE INTO scheduled_tasks (id, user_id, bot_name, type, cron_delay, message, next_fire, created_at) VALUES (?,?,?,?,?,?,?,?)";
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, t.id()); ps.setString(2, t.userId());
+            ps.setString(3, t.botName()); ps.setString(4, t.type());
+            ps.setString(5, t.cronDelay()); ps.setString(6, t.message());
+            ps.setLong(7, t.nextFire()); ps.setLong(8, t.createdAt());
+            ps.executeUpdate();
+        } catch (Exception e) {
+            System.err.println("[数据库] ❌ 保存任务失败: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public TaskRecord loadTask(String taskId) {
+        String sql = "SELECT * FROM scheduled_tasks WHERE id = ?";
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, taskId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return mapTask(rs);
+            }
+        } catch (Exception e) {
+            System.err.println("[数据库] ❌ 读取任务失败: " + e.getMessage());
+        }
+        return null;
+    }
+
+    @Override
+    public List<TaskRecord> loadAllTasks() {
+        List<TaskRecord> list = new ArrayList<>();
+        String sql = "SELECT * FROM scheduled_tasks ORDER BY next_fire ASC";
+        try (Connection c = connect(); Statement s = c.createStatement();
+             ResultSet rs = s.executeQuery(sql)) {
+            while (rs.next()) list.add(mapTask(rs));
+        } catch (Exception e) {
+            System.err.println("[数据库] ❌ 读取任务列表失败: " + e.getMessage());
+        }
+        return list;
+    }
+
+    @Override
+    public void deleteTask(String taskId) {
+        String sql = "DELETE FROM scheduled_tasks WHERE id = ?";
+        try (Connection c = connect(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, taskId); ps.executeUpdate();
+        } catch (Exception e) {
+            System.err.println("[数据库] ❌ 删除任务失败: " + e.getMessage());
+        }
+    }
+
+    private TaskRecord mapTask(ResultSet rs) throws SQLException {
+        return new TaskRecord(rs.getString("id"), rs.getString("user_id"),
+            rs.getString("bot_name"), rs.getString("type"),
+            rs.getString("cron_delay"), rs.getString("message"),
+            rs.getLong("next_fire"), rs.getLong("created_at"));
     }
 
     private Connection connect() throws SQLException {
