@@ -1,6 +1,5 @@
 package org.example.bot;
 
-import org.example.bot.db.DatabaseManager;
 import org.example.bot.impl.*;
 import org.example.bot.service.*;
 import org.example.bot.util.ConfigUtil;
@@ -33,10 +32,9 @@ public class Diagnostic {
 
         // 3. DeepSeek AI
         System.out.println("\n--- 3. DeepSeek AI 服务 ---");
-        DatabaseManager db = new DatabaseManager("chat.db");
         try {
             DeepSeekAiServiceImpl ai = new DeepSeekAiServiceImpl(
-                    db,"你是一个测试助手。", "只回复OK");
+                "你是一个测试助手。", "只回复OK", null);
             System.out.println("  ✅ 创建成功");
             try {
                 String reply = ai.chat("test", "回复OK");

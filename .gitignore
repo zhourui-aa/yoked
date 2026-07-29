@@ -1,15 +1,39 @@
-.idea/
-target/
-out/
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# 已忽略包含查询文件的默认文件夹
+/queries/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
+
+# 编译输出（包含 secrets 的目录）
+/target/
+/out/
+/build/
+
+# 本地配置（含真实 API keys，绝不能上传）
+/config.properties
+/src/main/resources/config.properties
+
+# 测试文件
+/Test*.java
+/Test*.class
+/CreateDB.java
+/CreateDB.class
+
+# 数据库文件
+/*.db
+/*.db-wal
+/*.db-shm
+
+# IDE 配置
+/.idea/
+/.vscode/
+
+# 临时文件
+/.cp
+/.cp3.txt
 *.class
-*.db
-*.db-shm
-*.db-wal
-*.zip
-.claude/
-CLAUDE.md
-project-explain.html
-项目深度解析.md
-.cp*.txt
-config.properties
-football_data.json

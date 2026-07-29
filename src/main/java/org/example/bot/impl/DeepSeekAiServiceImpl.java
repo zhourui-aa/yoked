@@ -6,8 +6,8 @@ import com.openai.client.OpenAIClient;
 import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.models.FunctionDefinition;
 import com.openai.models.chat.completions.*;
-import org.example.bot.db.DatabaseManager;
 import org.example.bot.service.AiService;
+import org.example.bot.service.DatabaseService;
 import org.example.bot.util.ConfigUtil;
 
 import java.util.List;
@@ -26,8 +26,10 @@ public class DeepSeekAiServiceImpl implements AiService {
     private final Gson gson = new Gson();
     private final SessionManager sessionManager;
     private final BotState botState;
+    private final DatabaseService db;
 
-    public DeepSeekAiServiceImpl(DatabaseManager dbManager, String defaultPersona, String techInstructions) {
+    public DeepSeekAiServiceImpl(String defaultPersona, String techInstructions,
+                                  DatabaseService db) {
 
         String apiKey = ConfigUtil.get("deepseek.api.key", "DEEPSEEK_API_KEY");
         if (apiKey == null || apiKey.isBlank()) {
@@ -40,10 +42,24 @@ public class DeepSeekAiServiceImpl implements AiService {
                 .apiKey(apiKey.trim())
                 .baseUrl(BASE_URL)
                 .build();
-        this.sessionManager = new SessionManager(dbManager,defaultPersona, techInstructions);
+        this.sessionManager = new SessionManager(defaultPersona, techInstructions, db);
         this.botState = new BotState();
+        this.db = db;
 
         System.out.println("[AI] DeepSeek 服务已就绪（模型: " + MODEL + "）");
+    }
+
+    private void persist(String userId, String role, String content) {
+        if (db != null) db.saveChat(userId, role, content);
+    }
+
+    private void restoreHistory(String userId, Session session) {
+        if (db == null || !session.roles.isEmpty()) return;
+        var records = db.loadChats(userId, MAX_HISTORY);
+        for (var r : records) {
+            session.roles.add(r.role());
+            session.contents.add(r.content());
+        }
     }
 
     /** per-user 媒体缓存（图片、文档、新闻），线程安全 */
@@ -59,8 +75,10 @@ public class DeepSeekAiServiceImpl implements AiService {
     @Override
     public String chat(String userId, String userMessage) {
         Session session = sessionManager.getOrCreate(userId);
+        restoreHistory(userId, session);
 
         session.add("user", userMessage);
+        persist(userId, "user", userMessage);
         session.trim(MAX_HISTORY);
 
         try {
@@ -79,11 +97,8 @@ public class DeepSeekAiServiceImpl implements AiService {
                     builder.model(MODEL).build());
 
             String reply = completion.choices().get(0).message().content().orElse("");
-            if (reply.isBlank()) {
-                System.out.println("[AI] ⚠ API 返回空白内容");
-                reply = "嗯？我好像没听清，能再说一遍吗？";
-            }
             session.add("assistant", reply);
+            persist(userId, "assistant", reply);
             return reply;
 
         } catch (Exception e) {
@@ -103,13 +118,15 @@ public class DeepSeekAiServiceImpl implements AiService {
     public void record(String userId, String userInput, String assistantOutput) {
         Session session = sessionManager.getOrCreate(userId);
         session.add("user", userInput);
+        persist(userId, "user", userInput);
         session.add("assistant", assistantOutput);
+        persist(userId, "assistant", assistantOutput);
         session.trim(MAX_HISTORY);
     }
 
-    // ---- 统一 Function Calling ----
+    // ---- Agent 循环 — AI 自主规划 + 多轮执行 ----
 
-    private static final int MAX_FC_ROUNDS = 5; // 最多工具调用轮次，防止无限循环
+    private static final int MAX_AGENT_ROUNDS = 5; // 最多工具调用轮次
 
     @Override
     public String chatWithTools(String userId, String userMessage,
@@ -117,10 +134,11 @@ public class DeepSeekAiServiceImpl implements AiService {
                                 Map<String, java.util.function.Function<JsonObject, String>> executors) {
         Session session = sessionManager.getOrCreate(userId);
         session.add("user", userMessage);
+        persist(userId, "user", userMessage);
         session.trim(MAX_HISTORY);
 
         try {
-            // 步骤 1: 构建请求 — 系统提示 + 对话历史 + 全部工具
+            // Build initial request
             ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
                     .addSystemMessage(sessionManager.fullSystemPrompt(session));
 
@@ -140,39 +158,39 @@ public class DeepSeekAiServiceImpl implements AiService {
             ChatCompletionMessage message = client.chat().completions()
                     .create(builder.build()).choices().get(0).message();
 
-            // 步骤 2: 循环 — AI 可能连续调用多轮工具
-            for (int round = 0; round < MAX_FC_ROUNDS; round++) {
+            // Agent loop — AI autonomously decides when to stop
+            for (int round = 1; round <= MAX_AGENT_ROUNDS; round++) {
                 List<ChatCompletionMessageToolCall> toolCalls =
                     message.toolCalls().orElse(List.of());
 
-                // 没有工具调用了 → 返回最终文本回复
+                // No more tools → AI is satisfied, return final answer
                 if (toolCalls.isEmpty()) {
                     String reply = message.content().orElse("");
                     if (!reply.isBlank()) {
+                        System.out.println("[Agent] ✅ 第" + round + "轮完成 → 返回最终回复");
                         session.add("assistant", reply);
+                        persist(userId, "assistant", reply);
                         return reply;
                     }
-                    System.out.println("[AI] ⚠ FC 第一轮返回空白，降级到自由对话");
-                    return null; // 第一轮就没有 tool_call 也没内容 → 降级
+                    return null; // no tool_call and no content → fallback
                 }
 
-                // 记录 assistant 的 tool_calls 到对话
-                try {
-                    builder.addMessage(ChatCompletionAssistantMessageParam.builder()
-                            .toolCalls(message.toolCalls().orElse(List.of()))
-                            .build());
-                } catch (Exception e) {
-                    System.err.println("[AI] ❌ 构建 assistant tool_calls 消息失败: "
-                        + e.getClass().getSimpleName() + ": " + e.getMessage());
-                    return null;
-                }
+                System.out.println("[Agent] 🔄 第" + round + "/" + MAX_AGENT_ROUNDS
+                    + "轮 → 调用 " + toolCalls.size() + " 个工具: "
+                    + toolCalls.stream().map(tc -> tc.asFunction().function().name())
+                        .reduce((a, b) -> a + ", " + b).orElse(""));
 
-                // 执行本轮所有工具
+                // Record assistant tool_calls
+                builder.addMessage(ChatCompletionAssistantMessageParam.builder()
+                        .toolCalls(message.toolCalls().orElse(List.of()))
+                        .build());
+
+                // Execute all tools in this round
                 for (ChatCompletionMessageToolCall tc : toolCalls) {
                     ChatCompletionMessageFunctionToolCall funcCall = tc.asFunction();
                     String funcName = funcCall.function().name();
                     String arguments = funcCall.function().arguments();
-                    System.out.println("[FC] AI 调用工具: " + funcName + "(" + arguments + ")");
+                    System.out.println("[FC]   → " + funcName + "(" + arguments + ")");
 
                     JsonObject args = gson.fromJson(
                         arguments != null ? arguments : "{}", JsonObject.class);
@@ -182,39 +200,23 @@ public class DeepSeekAiServiceImpl implements AiService {
                         ? executor.apply(args)
                         : "工具 " + funcName + " 未注册执行器";
 
-                    try {
-                        builder.addMessage(ChatCompletionToolMessageParam.builder()
-                                .toolCallId(funcCall.id())
-                                .content(result)
-                                .build());
-                    } catch (Exception e) {
-                        System.err.println("[AI] ❌ 构建工具结果消息失败 tool=" + funcName
-                            + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-                        return null;
-                    }
+                    builder.addMessage(ChatCompletionToolMessageParam.builder()
+                            .toolCallId(funcCall.id())
+                            .content(result)
+                            .build());
                 }
 
-                // 继续对话 — AI 可能再调工具或返回最终文本
-                try {
-                    builder.model(MODEL);
-                    message = client.chat().completions().create(builder.build())
-                            .choices().get(0).message();
-                } catch (Exception e) {
-                    String msg = "[AI] ❌ 第二轮到 API 调用失败: "
-                        + e.getClass().getSimpleName() + ": " + e.getMessage();
-                    Throwable c = e.getCause();
-                    while (c != null) {
-                        msg += " ← " + c.getClass().getSimpleName() + ": " + c.getMessage();
-                        c = c.getCause();
-                    }
-                    System.err.println(msg);
-                    return null;
-                }
+                // Continue loop — AI may call more tools or return final answer
+                builder.model(MODEL);
+                message = client.chat().completions().create(builder.build())
+                        .choices().get(0).message();
             }
 
-            // 超过最大轮次 — 返回最后一条消息（不含 tool_calls 的）
+            // Max rounds reached
+            System.out.println("[Agent] ⚠ 达到最大轮次 " + MAX_AGENT_ROUNDS + " → 强制返回");
             String reply = message.content().orElse("抱歉，处理超时，请简化你的请求。");
             session.add("assistant", reply);
+            persist(userId, "assistant", reply);
             return reply;
 
         } catch (Exception e) {
@@ -224,7 +226,7 @@ public class DeepSeekAiServiceImpl implements AiService {
                 msg += " ← " + cause.getClass().getSimpleName() + ": " + cause.getMessage();
                 cause = cause.getCause();
             }
-            System.err.println("[AI] ❌ Function Calling 失败: " + msg);
+            System.err.println("[AI] ❌ Agent 循环异常: " + msg);
             return null;
         }
     }

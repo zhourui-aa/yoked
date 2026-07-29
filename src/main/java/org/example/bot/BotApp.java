@@ -43,6 +43,11 @@ import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
 import org.example.bot.db.DatabaseManager;
+import game.GameCommand;
+import game.GameEngine;
+import game.GameRegistry;
+import game.GameSession;
+import game.impl.WerewolfEngine;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -116,8 +121,8 @@ public class BotApp {
         }
 
         // 第 2 步：创建服务
-        var dbManager = new org.example.bot.db.DatabaseManager("chat.db");
-        AiService ai = new DeepSeekAiServiceImpl(dbManager, DEFAULT_PERSONA, TECH_INSTRUCTIONS);
+        var dbService = new org.example.bot.impl.SqliteDatabaseServiceImpl();
+        AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, dbService);
         WeatherBotService weather = WeatherBotService.create();
 
         ImageGenService imageGen = null;
@@ -164,6 +169,15 @@ public class BotApp {
 
         GarbageService garbage = new GarbageServiceImpl();
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
+
+        // 注册桌游引擎
+        GameRegistry.register(new WerewolfEngine());
+        try {
+            GameRegistry.register(new game.impl.UndercoverEngine());
+        } catch (Exception e) {
+            System.out.println("[Bot] ⚠ 谁是卧底引擎未注册: " + e.getMessage());
+        }
+        System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
         registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage);
@@ -252,6 +266,81 @@ public class BotApp {
                                            FinanceService finance,
                                            WebReaderService webReader,
                                            String userId, String text, boolean forceVoice) {
+        // ⓪ 游戏模式 — 优先于所有其他路由
+        // WAITING 状态：消息先尝试本地命令，未绑定用户自动绑定
+        if (GameRegistry.gameState() == GameRegistry.GameState.WAITING) {
+            GameSession gs = GameRegistry.session();
+            // 已绑定的主玩家 → 走本地命令（GameCommand）
+            if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
+            // 未绑定的新用户（扫码进来）
+            if (gs != null && gs.playerName(userId) == null) {
+                // 检查是否在等待输入昵称
+                if (GameRegistry.isPendingNickname(userId)) {
+                    // 用户输入的就是他的昵称
+                    String nickname = text.strip();
+                    if (nickname.isEmpty()) {
+                        bot.sendText(userId, "昵称不能为空，请输入你的昵称：");
+                        return;
+                    }
+                    // 检查昵称是否已被使用
+                    for (String uid : gs.boundUsers()) {
+                        if (gs.playerName(uid).equals(nickname)) {
+                            bot.sendText(userId, "❌ 昵称「" + nickname + "」已被使用，请换一个：");
+                            return;
+                        }
+                    }
+                    GameRegistry.removePendingNickname(userId);
+                    gs.bindUser(userId, nickname);
+                    bot.sendText(userId, "✅ 你已使用昵称「" + nickname + "」加入游戏！");
+                    for (String uid : gs.boundUsers()) {
+                        if (!uid.equals(userId)) cluster.sendToUser(uid, "📢 " + nickname + " 已加入游戏！");
+                    }
+                    String ready = GameRegistry.checkReady();
+                    if ("ready".equals(ready)) {
+                        for (String uid : gs.boundUsers())
+                            cluster.sendToUser(uid, "🎯 人数已够，发送「开始游戏」开始！");
+                    } else {
+                        bot.sendText(userId, "⏳ " + ready);
+                    }
+                } else {
+                    // 新用户，先要求输入昵称
+                    GameRegistry.addPendingNickname(userId);
+                    bot.sendText(userId, "🎮 欢迎加入「" + gs.engine().name() + "」！\n请输入你的昵称：");
+                }
+                return;
+            }
+            // 已绑定玩家、命令没匹配上 → 提示
+            if (gs != null) {
+                bot.sendText(userId, "⏳ 等待中（" + gs.boundUsers().size() + "/" + gs.engine().minPlayers() + "人）\n发送「开始游戏」开始。");
+                return;
+            }
+            return; // 兜底：WAITING 状态下不应继续往下走
+        }
+        // PLAYING / PAUSED 状态：消息路由到游戏引擎
+        if (GameRegistry.gameState() == GameRegistry.GameState.PLAYING
+            || GameRegistry.gameState() == GameRegistry.GameState.PAUSED) {
+            GameSession gs = GameRegistry.session();
+            if (gs != null && (gs.playerName(userId) != null || gs.boundUsers().contains(userId))) {
+                // 先把玩家的发言广播给所有人
+                String speaker = gs.playerName(userId);
+                if (speaker != null) {
+                    String tagMsg = "💬 " + speaker + " 说：" + text;
+                    for (String uid : gs.boundUsers()) {
+                        cluster.sendToUser(uid, tagMsg);
+                    }
+                }
+                String result = gs.engine().handle(gs, userId, text);
+                if (result == null) result = gs.process(userId, text);
+                if (result != null) {
+                    System.out.println("[回复] " + result);
+                    // 再广播 AI 回复给所有玩家
+                    for (String uid : gs.boundUsers()) {
+                        cluster.sendToUser(uid, result);
+                    }
+                }
+                return;
+            }
+        }
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
 
@@ -359,15 +448,6 @@ public class BotApp {
             return true;
         }
 
-        // "重置对话" / "清空对话"
-        if (text.equals("重置对话") || text.equals("清空对话")) {
-            var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
-            sm.clearCurrent(userId);
-            bot.sendText(userId, "✅ 当前对话已重置。");
-            System.out.println("[回复] 对话已重置");
-            return true;
-        }
-
         // "删除上面 N 条对话" / "删除上面N条"
         if (text.matches("删除上面\\d+条.*") || text.matches("删除上面\\d+轮.*")) {
             int n = Integer.parseInt(text.replaceAll("\\D+", ""));
@@ -406,6 +486,9 @@ public class BotApp {
             System.out.println("[回复] 删除关于: " + keyword);
             return true;
         }
+
+        // 桌游命令 — 自然语言智能匹配 + 精确命令
+        if (GameCommand.handle(bot, ai, userId, text, cluster)) return true;
 
         return false;
     }

@@ -1,15 +1,12 @@
 package org.example.bot.impl;
 
-import org.example.bot.db.DatabaseManager;
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
+import org.example.bot.service.DatabaseService;
 
-import java.lang.reflect.Type;
 import java.util.*;
 
 /**
  * 多会话管理器 — 每个用户可以创建多个独立对话，互不影响。
- * <p>数据通过 {@link DatabaseManager} 持久化到 SQLite。</p>
+ * 支持 SQLite 持久化：会话列表、用户偏好、语音模式等重启后自动恢复。
  */
 public class SessionManager {
 
@@ -58,86 +55,15 @@ public class SessionManager {
     // 全局默认人设和技术指令
     private final String defaultPersona;
     private final String techInstructions;
-    private final DatabaseManager db;
-    private final Gson gson = new Gson();
-    private static final Type STRING_LIST_TYPE = new TypeToken<List<String>>(){}.getType();
+    // 数据库持久化
+    private final DatabaseService db;
+    // 已从 DB 恢复的用户
+    private final Set<String> restored = new HashSet<>();
 
-    public SessionManager(DatabaseManager db, String defaultPersona, String techInstructions) {
-        this.db = db;
+    public SessionManager(String defaultPersona, String techInstructions, DatabaseService db) {
         this.defaultPersona = defaultPersona;
         this.techInstructions = techInstructions;
-        loadAllFromDb();
-        System.out.println("[Session] 💾 已从数据库加载会话数据");
-    }
-
-    // ======================== 持久化 ========================
-
-    /** 启动时从 SQLite 加载所有用户数据 */
-    private void loadAllFromDb() {
-        try {
-            // 加载所有用户的会话 —— 直接从 sessions 表遍历
-            // 简易实现：在首次 getOrCreate 时懒加载
-        } catch (Exception e) {
-            System.err.println("[DB] 加载会话失败: " + e.getMessage());
-        }
-    }
-
-    /** 将某个用户的当前会话状态保存到 DB */
-    private void saveUserToDb(String userId) {
-        try {
-            Map<String, Session> userSessions = sessions.get(userId);
-            String curName = currentSession.get(userId);
-            if (curName == null) curName = "默认";
-
-            if (userSessions != null) {
-                for (Map.Entry<String, Session> entry : userSessions.entrySet()) {
-                    Session s = entry.getValue();
-                    db.saveSession(userId, entry.getKey(), s.persona, s.roles, s.contents);
-                }
-            }
-
-            boolean vMode = voiceMode.getOrDefault(userId, false);
-            db.savePrefs(userId, curName, vMode);
-        } catch (Exception e) {
-            System.err.println("[DB] 保存用户 " + userId + " 数据失败: " + e.getMessage());
-        }
-    }
-
-    /** 懒加载：从 DB 恢复某个用户的全部会话 */
-    private void ensureLoaded(String userId) {
-        if (sessions.containsKey(userId)) return; // 已加载
-
-        try {
-            // 1. 加载会话
-            var loaded = db.loadSessions(userId);
-            Map<String, Session> userSessions = new LinkedHashMap<>();
-            for (var entry : loaded.entrySet()) {
-                String name = entry.getKey();
-                var row = entry.getValue();
-                Session s = new Session(name, row.persona());
-                // 解析 JSON 给 roles / contents
-                List<String> roles = gson.fromJson(row.rolesJson(), STRING_LIST_TYPE);
-                List<String> contents = gson.fromJson(row.contentsJson(), STRING_LIST_TYPE);
-                if (roles != null && contents != null && roles.size() == contents.size()) {
-                    s.roles.addAll(roles);
-                    s.contents.addAll(contents);
-                }
-                userSessions.put(name, s);
-            }
-            sessions.put(userId, userSessions);
-
-            // 2. 加载偏好
-            var prefs = db.loadPrefs(userId);
-            currentSession.put(userId, prefs.currentSession());
-            voiceMode.put(userId, prefs.voiceMode());
-
-        } catch (Exception e) {
-            System.err.println("[DB] 加载用户 " + userId + " 数据失败: " + e.getMessage());
-            // 降级：空内存
-            sessions.put(userId, new LinkedHashMap<>());
-            currentSession.putIfAbsent(userId, "默认");
-            voiceMode.putIfAbsent(userId, false);
-        }
+        this.db = db;
     }
 
     /** 构建完整 system prompt */
@@ -145,18 +71,64 @@ public class SessionManager {
         return s.persona + "\n" + techInstructions;
     }
 
+    /** 从 DB 恢复用户的所有状态 */
+    private synchronized void restoreIfNeeded(String userId) {
+        if (!restored.add(userId)) return;
+        if (db == null) return;
+
+        // 1. 恢复会话列表
+        var metas = db.loadSessionMetas(userId);
+        Map<String, Session> userSessions = new LinkedHashMap<>();
+        for (var m : metas) {
+            Session s = new Session(m.name(), m.persona().isEmpty() ? defaultPersona : m.persona());
+            userSessions.put(m.name(), s);
+        }
+        if (!userSessions.isEmpty()) {
+            sessions.put(userId, userSessions);
+        }
+
+        // 2. 恢复当前会话
+        String cur = db.loadUserPref(userId, "current_session");
+        if (cur != null && !cur.isBlank()) {
+            currentSession.put(userId, cur);
+        } else if (userSessions.isEmpty()) {
+            currentSession.put(userId, "默认");
+        }
+
+        // 3. 恢复语音模式
+        String vm = db.loadUserPref(userId, "voice_mode");
+        if ("true".equals(vm)) voiceMode.put(userId, true);
+
+        // 4. 恢复人设（兜底：如果 sessions 表没存，从 user_prefs 恢复）
+        String savedPersona = db.loadUserPref(userId, "persona");
+        if (savedPersona != null && !savedPersona.isBlank()) {
+            String curName = currentSession.get(userId);
+            if (curName != null && sessions.containsKey(userId)) {
+                Session s = sessions.get(userId).get(curName);
+                if (s != null && s.persona.equals(defaultPersona)) {
+                    s.persona = savedPersona;
+                }
+            }
+        }
+    }
+
     /** 获取当前会话（没有则创建默认会话） */
     public synchronized Session getOrCreate(String userId) {
-        ensureLoaded(userId);
+        restoreIfNeeded(userId);
         String name = currentSession.get(userId);
         if (name == null) {
             name = "默认";
             currentSession.put(userId, name);
+            if (db != null) db.saveUserPref(userId, "current_session", name);
         }
-        final String finalName = name;
-        Map<String, Session> userSessions = sessions.get(userId);
-        Session s = userSessions.computeIfAbsent(finalName, k -> new Session(finalName, defaultPersona));
-        saveUserToDb(userId); // 持久化
+        final String sessionName = name;
+        Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
+        Session s = userSessions.computeIfAbsent(sessionName, k -> {
+            Session ns = new Session(sessionName, defaultPersona);
+            if (db != null) db.saveSessionMeta(userId, sessionName, defaultPersona);
+            return ns;
+        });
+        setCurrentSessionTag(sessionName);
         return s;
     }
 
@@ -164,35 +136,39 @@ public class SessionManager {
     public synchronized Session createSession(String userId, String name) {
         name = name.strip();
         if (name.isEmpty()) name = "未命名";
+        restoreIfNeeded(userId);
 
-        ensureLoaded(userId);
-        Map<String, Session> userSessions = sessions.get(userId);
-        // 确保默认会话始终存在
+        Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
         if (!userSessions.containsKey("默认")) {
             userSessions.put("默认", new Session("默认", defaultPersona));
         }
-        // 同名覆盖
         Session session = new Session(name, defaultPersona);
         userSessions.put(name, session);
         currentSession.put(userId, name);
-        saveUserToDb(userId);
+        setCurrentSessionTag(name);
+
+        if (db != null) {
+            db.saveSessionMeta(userId, name, defaultPersona);
+            db.saveUserPref(userId, "current_session", name);
+        }
         return session;
     }
 
     /** 切换到已有会话，不存在则创建 */
     public synchronized Session switchTo(String userId, String name) {
         name = name.strip();
-        ensureLoaded(userId);
+        restoreIfNeeded(userId);
         currentSession.put(userId, name);
-        saveUserToDb(userId);
+        setCurrentSessionTag(name);
+        if (db != null) db.saveUserPref(userId, "current_session", name);
         return getOrCreate(userId);
     }
 
     /** 删除会话，不允许删除最后一个 */
     public synchronized String deleteSession(String userId, String name) {
         name = name.strip();
-        ensureLoaded(userId);
-        getOrCreate(userId);  // 确保默认存在
+        restoreIfNeeded(userId);
+        getOrCreate(userId);
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null || userSessions.size() <= 1) {
             return "不能删除唯一的对话，至少保留一个。";
@@ -200,28 +176,24 @@ public class SessionManager {
         Session removed = userSessions.remove(name);
         if (removed == null) return "找不到对话「" + name + "」。";
 
-        // DB 中删除
-        try { db.deleteSession(userId, name); } catch (Exception e) {
-            System.err.println("[DB] 删除会话失败: " + e.getMessage());
+        if (db != null) {
+            db.deleteSessionMeta(userId, name);
+            db.clearChats(userId, name);
         }
 
-        // 如果删除的是当前会话，切到第一个
         if (name.equals(currentSession.get(userId))) {
             String first = userSessions.keySet().iterator().next();
             currentSession.put(userId, first);
-            saveUserToDb(userId);
+            setCurrentSessionTag(first);
+            if (db != null) db.saveUserPref(userId, "current_session", first);
             return "已删除「" + name + "」，当前对话：「" + first + "」。";
         }
-        saveUserToDb(userId);
         return "已删除对话「" + name + "」。";
     }
 
     /** 列出所有会话 */
     public synchronized String listSessions(String userId) {
-        ensureLoaded(userId);
-        // 确保至少有一个默认会话
         getOrCreate(userId);
-
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null || userSessions.isEmpty()) return "你还没有任何对话。";
 
@@ -238,9 +210,7 @@ public class SessionManager {
         return sb.toString().strip();
     }
 
-    /** 获取对话历史长度，用于决定是否发帮助 */
     public synchronized int historySize(String userId) {
-        ensureLoaded(userId);
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null) return 0;
         String name = currentSession.get(userId);
@@ -249,17 +219,15 @@ public class SessionManager {
         return s != null ? s.roles.size() : 0;
     }
 
-    /** 清空当前会话（不删除） */
     public synchronized void clearCurrent(String userId) {
-        ensureLoaded(userId);
         Session s = getOrCreate(userId);
         s.clear();
-        saveUserToDb(userId);
+        String sessionName = currentSession.get(userId);
+        if (db != null && sessionName != null) db.clearChats(userId, sessionName);
     }
 
     /** 撤回当前会话的最后 N 轮对话（1轮=1条user+1条assistant） */
     public synchronized boolean undoLastN(String userId, int n) {
-        ensureLoaded(userId);
         Session s = getOrCreate(userId);
         int toRemove = n * 2;
         if (toRemove > s.roles.size()) toRemove = s.roles.size();
@@ -268,36 +236,55 @@ public class SessionManager {
             s.roles.remove(s.roles.size() - 1);
             s.contents.remove(s.contents.size() - 1);
         }
-        saveUserToDb(userId);
+        // 重新持久化
+        if (db != null) {
+            String name = currentSession.get(userId);
+            if (name != null) {
+                db.clearChats(userId, name);
+                // 重新写入剩余消息
+                for (int i = 0; i < s.roles.size(); i++) {
+                    db.saveChat(userId, s.roles.get(i), s.contents.get(i));
+                }
+            }
+        }
         return true;
     }
 
-    /** 修改当前会话的人设 */
     public synchronized void setPersona(String userId, String persona) {
-        ensureLoaded(userId);
         Session s = getOrCreate(userId);
         s.persona = persona;
-        saveUserToDb(userId);
+        // 持久化到 session 的 persona 字段
+        String name = currentSession.get(userId);
+        if (db != null && name != null) db.saveSessionMeta(userId, name, persona);
+        // 同时保存为默认人设偏好
+        if (db != null) db.saveUserPref(userId, "persona", persona);
     }
 
-    /** 切换语音模式 */
+    /** 查看当前人设 */
+    public synchronized String getPersona(String userId) {
+        Session s = getOrCreate(userId);
+        return "🎭 当前人设：「" + s.persona + "」";
+    }
+
     public synchronized boolean toggleVoiceMode(String userId) {
-        ensureLoaded(userId);
+        restoreIfNeeded(userId);
         boolean current = voiceMode.getOrDefault(userId, false);
         voiceMode.put(userId, !current);
-        saveUserToDb(userId);
+        if (db != null) db.saveUserPref(userId, "voice_mode", String.valueOf(!current));
         return !current;
     }
 
-    /** 查询语音模式是否开启 */
     public synchronized boolean isVoiceMode(String userId) {
-        ensureLoaded(userId);
+        restoreIfNeeded(userId);
         return voiceMode.getOrDefault(userId, false);
     }
 
-    /** 获取所有 session 快照（用于恢复等） */
     public synchronized Map<String, Session> getAllSessions(String userId) {
-        ensureLoaded(userId);
         return sessions.getOrDefault(userId, Collections.emptyMap());
+    }
+
+    /** 设置 ThreadLocal 当前会话名，供 SqliteDatabaseServiceImpl 使用 */
+    private void setCurrentSessionTag(String name) {
+        if (name != null) SqliteDatabaseServiceImpl.CURRENT_SESSION.set(name);
     }
 }
