@@ -40,6 +40,12 @@ public class SessionManager {
         🎵 切换音色 — "切换音色 Ethan" 切换 TTS 音色（14种）
         🤖 多 Bot — "新建bot 客服2号" 运行时新增微信号
 
+        🎮 桌游模式 — 输入「桌游模式」开启：
+        ① 输入「游戏名 人数」如：狼人杀 6
+        ② 输入你的代号，如：周瑞
+        ③ 输入「加入 昵称」为他人生成专属二维码
+        ④ 所有人扫码后自动开始
+
         📂 会话管理：
         • 新建对话「名称」
         • 切换到「名称」对话
@@ -98,18 +104,6 @@ public class SessionManager {
         // 3. 恢复语音模式
         String vm = db.loadUserPref(userId, "voice_mode");
         if ("true".equals(vm)) voiceMode.put(userId, true);
-
-        // 4. 恢复人设（兜底：如果 sessions 表没存，从 user_prefs 恢复）
-        String savedPersona = db.loadUserPref(userId, "persona");
-        if (savedPersona != null && !savedPersona.isBlank()) {
-            String curName = currentSession.get(userId);
-            if (curName != null && sessions.containsKey(userId)) {
-                Session s = sessions.get(userId).get(curName);
-                if (s != null && s.persona.equals(defaultPersona)) {
-                    s.persona = savedPersona;
-                }
-            }
-        }
     }
 
     /** 获取当前会话（没有则创建默认会话） */
@@ -226,38 +220,11 @@ public class SessionManager {
         if (db != null && sessionName != null) db.clearChats(userId, sessionName);
     }
 
-    /** 撤回当前会话的最后 N 轮对话（1轮=1条user+1条assistant） */
-    public synchronized boolean undoLastN(String userId, int n) {
-        Session s = getOrCreate(userId);
-        int toRemove = n * 2;
-        if (toRemove > s.roles.size()) toRemove = s.roles.size();
-        if (toRemove < 2) return false;
-        for (int i = 0; i < toRemove; i++) {
-            s.roles.remove(s.roles.size() - 1);
-            s.contents.remove(s.contents.size() - 1);
-        }
-        // 重新持久化
-        if (db != null) {
-            String name = currentSession.get(userId);
-            if (name != null) {
-                db.clearChats(userId, name);
-                // 重新写入剩余消息
-                for (int i = 0; i < s.roles.size(); i++) {
-                    db.saveChat(userId, s.roles.get(i), s.contents.get(i));
-                }
-            }
-        }
-        return true;
-    }
-
     public synchronized void setPersona(String userId, String persona) {
         Session s = getOrCreate(userId);
         s.persona = persona;
-        // 持久化到 session 的 persona 字段
         String name = currentSession.get(userId);
         if (db != null && name != null) db.saveSessionMeta(userId, name, persona);
-        // 同时保存为默认人设偏好
-        if (db != null) db.saveUserPref(userId, "persona", persona);
     }
 
     /** 查看当前人设 */

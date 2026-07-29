@@ -43,6 +43,12 @@ public interface GameEngine {
      */
     String handle(GameSession session, String userId, String text);
 
+    /**
+     * 当前游戏状态快照（注入到 DeepSeek 上下文中）。
+     * 返回空字符串表示无需额外状态。
+     */
+    default String stateContext() { return ""; }
+
     /** 游戏是否结束 */
     boolean isOver();
 }

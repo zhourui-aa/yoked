@@ -39,15 +39,27 @@ import org.example.bot.service.IdiomService;
 import org.example.bot.impl.IdiomServiceImpl;
 import org.example.bot.service.GarbageService;
 import org.example.bot.impl.GarbageServiceImpl;
-import org.example.bot.tools.ToolCenter;
-import org.example.bot.tools.ToolCondition;
-import org.example.bot.tools.ToolDefinition;
-import org.example.bot.db.DatabaseManager;
 import game.GameCommand;
 import game.GameEngine;
 import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
+import game.impl.MurderMysteryEngine;
+import org.example.bot.service.SchedulerService;
+import org.example.bot.impl.SchedulerServiceImpl;
+import org.example.bot.service.DatabaseService;
+import org.example.bot.impl.SqliteDatabaseServiceImpl;
+import org.example.bot.skill.SkillManager;
+import org.example.bot.rag.ChatHistoryRetriever;
+import org.example.bot.rag.DocumentRetriever;
+import org.example.bot.rag.EmbeddingService;
+import org.example.bot.rag.LocalEmbeddingService;
+import org.example.bot.rag.RAGPipeline;
+import org.example.bot.rag.VectorStore;
+import org.example.bot.util.ConfigUtil;
+import org.example.bot.tools.ToolCenter;
+import org.example.bot.tools.ToolCondition;
+import org.example.bot.tools.ToolDefinition;
 
 import com.openai.core.JsonValue;
 import com.openai.models.FunctionDefinition;
@@ -98,6 +110,10 @@ public class BotApp {
     private static final MusicService music = new MusicServiceImpl();
     /** 工具中心 — 统一管理所有 FC 工具定义、注册和条件评估 */
     private static final ToolCenter toolCenter = new ToolCenter();
+    /** Skill 管理器 — 扫描 src/skills/ 自动加载 .md */
+    private static final SkillManager skillManager = new SkillManager("src/skills");
+    /** RAG 管道 — 检索聊天历史增强上下文 */
+    private static final RAGPipeline ragPipeline = new RAGPipeline(5);
     /** Bot 集群 — 支持多微信号同时在线，运行时可通过命令动态新建 */
     private static BotCluster cluster;
 
@@ -121,8 +137,34 @@ public class BotApp {
         }
 
         // 第 2 步：创建服务
-        var dbService = new org.example.bot.impl.SqliteDatabaseServiceImpl();
-        AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, dbService);
+        DatabaseService db = new SqliteDatabaseServiceImpl();
+
+        SchedulerService scheduler = new SchedulerServiceImpl(db);
+        scheduler.setFireHandler((userId, info) -> {
+            ILinkBot b = cluster.getBot(info.botName());
+            if (b != null) {
+                String prefix = info.type().equals("recurring") ? "🔔 定期任务：\n" : "⏰ 定时提醒：\n";
+                b.sendText(userId, prefix + info.message());
+            }
+        });
+
+        AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, db);
+
+        // 扫描 src/skills/ 加载所有 .md Skill
+        int loaded = skillManager.loadFromDir();
+        System.out.println("[Skill] 已从 src/skills/ 加载 " + loaded + " 个 Skill");
+
+        // 初始化 RAG 管道
+        String dbFile = ConfigUtil.get("sqlite.db.path", "SQLITE_DB_PATH");
+        if (dbFile == null || dbFile.isBlank()) dbFile = "yoked.db";
+        EmbeddingService embedder = new LocalEmbeddingService(256);
+        VectorStore vectorStore = new VectorStore(dbFile, embedder);
+        ragPipeline.addRetriever(new ChatHistoryRetriever(db));
+        DocumentRetriever docRetriever = new DocumentRetriever(vectorStore);
+        int docChunks = docRetriever.indexDirectory("docs");
+        ragPipeline.addRetriever(docRetriever);
+        System.out.println("[RAG] 向量存储: " + vectorStore.count() + " 条（含文档 " + docChunks + " 条）");
+        System.out.println(ragPipeline.summary());
         WeatherBotService weather = WeatherBotService.create();
 
         ImageGenService imageGen = null;
@@ -172,16 +214,13 @@ public class BotApp {
 
         // 注册桌游引擎
         GameRegistry.register(new WerewolfEngine());
-        try {
-            GameRegistry.register(new game.impl.UndercoverEngine());
-        } catch (Exception e) {
-            System.out.println("[Bot] ⚠ 谁是卧底引擎未注册: " + e.getMessage());
-        }
+        GameRegistry.register(new MurderMysteryEngine());
         System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db, scheduler);
         System.out.println(toolCenter.summary());
+        System.out.println(skillManager.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
@@ -205,6 +244,29 @@ public class BotApp {
         cluster.setHandler(msg -> {
             String userId = msg.userId();
             ILinkBot bot = BotCluster.current();
+
+            // 游戏大厅自动绑定 + 通知
+            if (GameRegistry.hasLobby() && bot != null) {
+                if (GameRegistry.lobby().bind(bot.name(), userId)) {
+                    String notify = GameCommand.onBotBound(bot.name());
+                    System.out.println("[大厅] " + bot.name() + " 已扫码");
+                    if (notify != null) {
+                        bot.sendText(GameRegistry.lobby().creatorId, notify);
+                    }
+                    // 人齐自动开始
+                    if (GameRegistry.hasLobby() && GameRegistry.lobby().allBound()) {
+                        GameCommand.autoStart(bot, fAi, GameRegistry.lobby(), cluster);
+                    }
+                }
+            }
+
+            // 大厅中非创建者的已绑定玩家→回复等待状态（创建者放行，需处理"加入"命令）
+            if (GameRegistry.hasLobby()
+                && !userId.equals(GameRegistry.lobby().creatorId)
+                && GameRegistry.lobby().boundMap().containsValue(userId)) {
+                bot.sendText(userId, "🏠 你已加入游戏，等待开始...");
+                return;
+            }
 
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
@@ -266,85 +328,34 @@ public class BotApp {
                                            FinanceService finance,
                                            WebReaderService webReader,
                                            String userId, String text, boolean forceVoice) {
-        // ⓪ 游戏模式 — 优先于所有其他路由
-        // WAITING 状态：消息先尝试本地命令，未绑定用户自动绑定
-        if (GameRegistry.gameState() == GameRegistry.GameState.WAITING) {
+        // ⓪ 游戏模式 — 如果正在玩游戏且用户是玩家，消息路由到游戏会话
+        if (GameRegistry.isRunning()) {
             GameSession gs = GameRegistry.session();
-            // 已绑定的主玩家 → 走本地命令（GameCommand）
-            if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
-            // 未绑定的新用户（扫码进来）
-            if (gs != null && gs.playerName(userId) == null) {
-                // 检查是否在等待输入昵称
-                if (GameRegistry.isPendingNickname(userId)) {
-                    // 用户输入的就是他的昵称
-                    String nickname = text.strip();
-                    if (nickname.isEmpty()) {
-                        bot.sendText(userId, "昵称不能为空，请输入你的昵称：");
-                        return;
-                    }
-                    // 检查昵称是否已被使用
-                    for (String uid : gs.boundUsers()) {
-                        if (gs.playerName(uid).equals(nickname)) {
-                            bot.sendText(userId, "❌ 昵称「" + nickname + "」已被使用，请换一个：");
-                            return;
-                        }
-                    }
-                    GameRegistry.removePendingNickname(userId);
-                    gs.bindUser(userId, nickname);
-                    bot.sendText(userId, "✅ 你已使用昵称「" + nickname + "」加入游戏！");
-                    for (String uid : gs.boundUsers()) {
-                        if (!uid.equals(userId)) cluster.sendToUser(uid, "📢 " + nickname + " 已加入游戏！");
-                    }
-                    String ready = GameRegistry.checkReady();
-                    if ("ready".equals(ready)) {
-                        for (String uid : gs.boundUsers())
-                            cluster.sendToUser(uid, "🎯 人数已够，发送「开始游戏」开始！");
-                    } else {
-                        bot.sendText(userId, "⏳ " + ready);
-                    }
-                } else {
-                    // 新用户，先要求输入昵称
-                    GameRegistry.addPendingNickname(userId);
-                    bot.sendText(userId, "🎮 欢迎加入「" + gs.engine().name() + "」！\n请输入你的昵称：");
-                }
-                return;
-            }
-            // 已绑定玩家、命令没匹配上 → 提示
-            if (gs != null) {
-                bot.sendText(userId, "⏳ 等待中（" + gs.boundUsers().size() + "/" + gs.engine().minPlayers() + "人）\n发送「开始游戏」开始。");
-                return;
-            }
-            return; // 兜底：WAITING 状态下不应继续往下走
-        }
-        // PLAYING / PAUSED 状态：消息路由到游戏引擎
-        if (GameRegistry.gameState() == GameRegistry.GameState.PLAYING
-            || GameRegistry.gameState() == GameRegistry.GameState.PAUSED) {
-            GameSession gs = GameRegistry.session();
-            if (gs != null && (gs.playerName(userId) != null || gs.boundUsers().contains(userId))) {
-                // 先把玩家的发言广播给所有人
-                String speaker = gs.playerName(userId);
-                if (speaker != null) {
-                    String tagMsg = "💬 " + speaker + " 说：" + text;
-                    for (String uid : gs.boundUsers()) {
-                        cluster.sendToUser(uid, tagMsg);
-                    }
-                }
+            if (gs.playerName(userId) != null || gs.boundUsers().contains(userId)) {
+                String speakerName = gs.playerName(userId);
                 String result = gs.engine().handle(gs, userId, text);
-                if (result == null) result = gs.process(userId, text);
-                if (result != null) {
-                    System.out.println("[回复] " + result);
-                    // 再广播 AI 回复给所有玩家
-                    for (String uid : gs.boundUsers()) {
-                        cluster.sendToUser(uid, result);
+                if (result == null) {
+                    // 正常发言 → 先广播给其他玩家 → 再调 AI 主持人
+                    if (speakerName != null) {
+                        broadcastPlayerMessage(gs, speakerName, text, bot);
                     }
+                    result = gs.process(userId, text);
+                }
+                if (result != null) {
+                    // 解析私信：把【私信:玩家名】内容 分别发给对应玩家
+                    dispatchGameReply(bot, gs, result, userId);
                 }
                 return;
             }
         }
+
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
 
-        // ② 语音意图 — 关键词命中即生效（不再额外调 AI 确认）
+        // ② Skill 预处理 — 命中则短路，跳过 AI 调用
+        if (skillManager.preProcess(userId, text, bot)) return;
+
+        // ③ 语音意图 — 关键词命中即生效（不再额外调 AI 确认）
         boolean wantsVoice = forceVoice
             || (tts != null && containsKeyword(text, VOICE_REPLY_KEYWORDS));
         if (wantsVoice) System.out.println("[Bot] 🔊 语音回复");
@@ -355,22 +366,31 @@ public class BotApp {
             = new java.util.LinkedHashMap<>();
         buildTools(tools, executors, bot, ai, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, userId);
 
-        // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
+        // ④ RAG 检索 + Skill 上下文增强 — 在调 AI 之前注入
+        String ragContext = ragPipeline.augment(userId, text);
+        String skillAug = skillManager.augmentContext(userId, text);
+        StringBuilder extra = new StringBuilder();
+        if (!ragContext.isEmpty()) extra.append(ragContext).append("\n");
+        if (!skillAug.isEmpty()) extra.append(skillAug).append("\n");
+        String finalText = extra.isEmpty() ? text : text + "\n\n【参考信息】\n" + extra.toString().strip();
+
+        // ⑤ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
-            String fcResult = ai.chatWithTools(userId, text, tools, executors);
+            String fcResult = ai.chatWithTools(userId, finalText, tools, executors);
             if (fcResult != null) {
+                fcResult = skillManager.postProcess(userId, fcResult);
                 System.out.println("[回复] " + fcResult);
                 bot.sendTextWithTyping(userId, fcResult, 500L);
                 if (wantsVoice || isVoiceMode(ai, userId))
                     sendAsVoice(bot, tts, userId, fcResult);
                 return;
             }
-            System.out.println("[Bot] ⚠ FC 返回空，降级到自由对话");
         }
 
-        // ⑤ 降级：AI 自由对话
+        // ⑥ 降级：AI 自由对话
         System.out.println("[Bot] → AI 对话");
-        String reply = ai.chat(userId, text);
+        String reply = ai.chat(userId, finalText);
+        reply = skillManager.postProcess(userId, reply);
         System.out.println("[回复] " + reply);
         bot.sendTextWithTyping(userId, reply, 500L);
         if (wantsVoice || isVoiceMode(ai, userId))
@@ -398,6 +418,13 @@ public class BotApp {
             } else {
                 bot.sendText(userId, "请告诉我想设定的人设，例如：设定人设：你是一只可爱的猫娘");
             }
+            return true;
+        }
+
+        // "查看人设" / "当前人设" / "我的人设"
+        if (text.equals("查看人设") || text.equals("当前人设") || text.equals("我的人设")) {
+            var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
+            bot.sendText(userId, sm.getPersona(userId));
             return true;
         }
 
@@ -440,54 +467,8 @@ public class BotApp {
             System.out.println("[回复] 新建bot: " + name);
             return true;
         }
-        if (text.equals("重置对话") || text.equals("清空对话")) {
-            var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
-            sm.clearCurrent(userId);
-            bot.sendText(userId, "✅ 当前对话已重置。");
-            System.out.println("[回复] 对话已重置");
-            return true;
-        }
 
-        // "删除上面 N 条对话" / "删除上面N条"
-        if (text.matches("删除上面\\d+条.*") || text.matches("删除上面\\d+轮.*")) {
-            int n = Integer.parseInt(text.replaceAll("\\D+", ""));
-            var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
-            if (sm.undoLastN(userId, n)) {
-                bot.sendText(userId, "✅ 已删除上面 " + n + " 轮对话。");
-                System.out.println("[回复] 删除上面" + n + "轮");
-            } else {
-                bot.sendText(userId, "没有那么多对话可以删除。");
-            }
-            return true;
-        }
-
-// "删除关于'xxx'的对话" / "删除关于xxx的对话" / "删除关于xxx的消息"
-        if (text.startsWith("删除关于")) {
-            String keyword = text.replaceFirst("^删除关于['\"]?", "")
-                    .replaceAll("['\"]的对话|的对话|的消息|的", "").strip();
-            if (keyword.isBlank()) {
-                bot.sendText(userId, "用法：删除关于 关键词 的对话\n例如：删除关于天气的对话");
-                return true;
-            }
-            try {
-                var db = new org.example.bot.db.DatabaseManager("chat.db");
-                var matches = db.searchContent(userId, keyword, 50);
-                db.close();
-                if (matches.isEmpty()) {
-                    bot.sendText(userId, "没有找到包含「" + keyword + "」的消息。");
-                } else {
-                    var sm = ((DeepSeekAiServiceImpl) ai).getSessionManager();
-                    sm.clearCurrent(userId);
-                    bot.sendText(userId, "✅ 已删除 " + matches.size() + " 条包含「" + keyword + "」的对话。");
-                }
-            } catch (Exception e) {
-                bot.sendText(userId, "操作出错：" + e.getMessage());
-            }
-            System.out.println("[回复] 删除关于: " + keyword);
-            return true;
-        }
-
-        // 桌游命令 — 自然语言智能匹配 + 精确命令
+        // 桌游命令
         if (GameCommand.handle(bot, ai, userId, text, cluster)) return true;
 
         return false;
@@ -554,7 +535,8 @@ public class BotApp {
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
             WebReaderService webReader, WebSearchService search,
-            IdiomService idiom, GarbageService garbage) {
+            IdiomService idiom, GarbageService garbage,
+            DatabaseService db, SchedulerService scheduler) {
 
         BotState bs = botState(ai);
 
@@ -959,6 +941,111 @@ public class BotApp {
                 String item = args.has("item") ? args.get("item").getAsString() : "";
                 return garbage.classify(item);
             }));
+
+        // ---- 查看聊天记录 ----
+        toolCenter.register(new ToolDefinition("view_chat_history",
+            "查看当前会话的最近聊天记录。当用户说「查看聊天记录」「最近聊了什么」「聊天历史」等时调用。",
+            Map.of("count", Map.of("type", "integer", "description", "显示条数，默认10")),
+            args -> {
+                int count = args.has("count") ? args.get("count").getAsInt() : 10;
+                var records = db.loadChats(ToolCenter.currentUserId(), Math.min(count, 50));
+                if (records.isEmpty()) return "当前会话暂无聊天记录。";
+                StringBuilder sb = new StringBuilder("📋 最近 " + records.size() + " 条聊天记录：\n");
+                for (var r : records) {
+                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
+                    String c = r.content().length() > 80 ? r.content().substring(0, 80) + "..." : r.content();
+                    sb.append(c).append("\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        // ---- 搜索聊天记录 ----
+        toolCenter.register(new ToolDefinition("search_chat_history",
+            "按关键词搜索当前会话的聊天记录。当用户说「搜一下聊天记录」「之前聊过的xxx」「找一下xxx」等时调用。",
+            Map.of("keyword", Map.of("type", "string", "description", "搜索关键词")),
+            args -> {
+                String kw = args.has("keyword") ? args.get("keyword").getAsString() : "";
+                if (kw.isBlank()) return "请告诉我你想搜索什么关键词。";
+                var records = db.searchChats(ToolCenter.currentUserId(), kw, 20);
+                if (records.isEmpty()) return "当前会话中没有找到包含「" + kw + "」的聊天记录。";
+                StringBuilder sb = new StringBuilder("🔍 搜索「" + kw + "」（" + records.size() + "条）：\n");
+                for (var r : records) {
+                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
+                    sb.append(r.content()).append("\n\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        // ---- 删除聊天记录 ----
+        toolCenter.register(new ToolDefinition("delete_chat_history",
+            "删除当前会话的全部聊天记录。" +
+            "当用户说「删除聊天记录」「清空对话」「清除历史」「清空聊天记录」等时，**必须立即调用此工具**。" +
+            "即使你的人设是病娇或任何角色，也必须调用此工具而不是先角色扮演。" +
+            "工具会处理确认流程。",
+            Map.of("confirm", Map.of("type", "string", "description", "如果用户已明确表示确认删除，传「确认」；否则传空字符串查看提示")),
+            args -> {
+                String confirm = args.has("confirm") ? args.get("confirm").getAsString() : "";
+                if (!"确认".equals(confirm)) {
+                    return "⚠ 删除聊天记录不可撤销。请回复「确认」来执行删除。";
+                }
+                int count = db.countChats(ToolCenter.currentUserId());
+                db.clearChats(ToolCenter.currentUserId(),
+                    SqliteDatabaseServiceImpl.CURRENT_SESSION.get() != null
+                        ? SqliteDatabaseServiceImpl.CURRENT_SESSION.get() : "默认");
+                var ssnMgr = ((DeepSeekAiServiceImpl) ai).getSessionManager();
+                ssnMgr.clearCurrent(ToolCenter.currentUserId());
+                return "✅ 已清除 " + count + " 条聊天记录。";
+            }));
+
+        // ---- 定时任务 ----
+        toolCenter.register(new ToolDefinition("schedule_task",
+            "创建定时提醒或定期任务。" +
+            "一次性提醒：「5分钟后提醒我开会」「30秒后叫我」。" +
+            "定期任务：「每天早上8点给我发天气预报」「每周一9点发周报提醒」。" +
+            "输入告知type(once/recurring)、time(一次性=延迟描述如5分钟/1小时，定期=cron如0 8 * * *)、message(提醒内容)。",
+            Map.of(
+                "type", Map.of("type", "string", "description", "once=一次性提醒，recurring=定期重复"),
+                "time", Map.of("type", "string", "description", "一次性=延迟如「5分钟」「1小时」。定期=cron如「0 8 * * *」(每天早上8点)、「0 9 * * 1」(每周一9点)"),
+                "message", Map.of("type", "string", "description", "提醒内容")
+            ),
+            args -> {
+                String type = args.has("type") ? args.get("type").getAsString() : "once";
+                String time = args.has("time") ? args.get("time").getAsString() : "5分钟";
+                String msg = args.has("message") ? args.get("message").getAsString() : "定时提醒";
+                String uid = ToolCenter.currentUserId();
+                ILinkBot current = BotCluster.current();
+                String botName = current != null ? current.name() : "default";
+                String taskId = scheduler.schedule(uid, botName, type, time, msg);
+                String typeLabel = "once".equals(type) ? "定时提醒" : "定期任务";
+                return "⏰ " + typeLabel + "已创建（ID: " + taskId + "）\n"
+                    + "类型：" + ("once".equals(type) ? "一次性" : "定期") + "\n"
+                    + "时间：" + time + "\n"
+                    + "内容：" + msg;
+            }));
+
+        toolCenter.register(new ToolDefinition("list_tasks",
+            "列出当前用户的所有定时任务和定期任务。当用户说「查看定时任务」「有哪些提醒」「我的任务」等时调用。",
+            Map.of(),
+            args -> {
+                var tasks = scheduler.listTasks(ToolCenter.currentUserId());
+                if (tasks.isEmpty()) return "📋 当前没有定时任务。";
+                StringBuilder sb = new StringBuilder("📋 定时任务列表（" + tasks.size() + "个）：\n");
+                for (var t : tasks) {
+                    String typeIcon = "recurring".equals(t.type()) ? "🔁" : "⏰";
+                    sb.append(typeIcon).append(" [").append(t.id()).append("] ")
+                      .append(t.message()).append("\n");
+                }
+                return sb.toString().strip();
+            }));
+
+        toolCenter.register(new ToolDefinition("cancel_task",
+            "取消指定的定时任务。当用户说「取消定时任务」「删除提醒」等时调用。",
+            Map.of("task_id", Map.of("type", "string", "description", "要取消的任务ID")),
+            args -> {
+                String taskId = args.has("task_id") ? args.get("task_id").getAsString() : "";
+                if (taskId.isBlank()) return "请提供要取消的任务ID（可在「查看定时任务」中找到）。";
+                return scheduler.cancel(taskId);
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -1156,6 +1243,87 @@ public class BotApp {
     }
 
     // ---- 工具方法 ----
+
+    /** 解析游戏回复中的【私信:玩家名】标签，通过对应玩家的 bot 发送 */
+    private static void dispatchGameReply(ILinkBot speakerBot, GameSession gs, String reply, String speakerId) {
+        StringBuilder pub = new StringBuilder();
+        String privWho = null;
+        StringBuilder privMsg = new StringBuilder();
+
+        for (String line : reply.split("\n")) {
+            if (line.startsWith("【私信:") && line.contains("】")) {
+                // 发送上一个私信块
+                if (privWho != null && !privMsg.isEmpty()) {
+                    sendPrivate(privWho, privMsg.toString().strip(), gs, speakerBot);
+                    privMsg.setLength(0);
+                }
+                int end = line.indexOf("】");
+                privWho = cleanPlayerName(line.substring(4, end));
+                String tail = line.substring(end + 1).strip();
+                if (!tail.isEmpty()) privMsg.append(tail).append("\n");
+            } else if (privWho != null) {
+                privMsg.append(line).append("\n");
+            } else {
+                pub.append(line).append("\n");
+            }
+        }
+        // 最后一个私信块
+        if (privWho != null && !privMsg.isEmpty()) {
+            sendPrivate(privWho, privMsg.toString().strip(), gs, speakerBot);
+        }
+
+        String pubStr = pub.toString().strip();
+        if (!pubStr.isEmpty()) {
+            // 广播：每个玩家用自己对应的 bot 接收
+            for (String name : gs.playerNames()) {
+                String uid = gs.getUserId(name);
+                if (uid == null) continue;
+                String botName = gs.getPlayerBot(name);
+                ILinkBot targetBot = botName != null ? cluster.getBot(botName) : null;
+                if (targetBot != null) {
+                    targetBot.sendText(uid, pubStr);
+                } else {
+                    speakerBot.sendText(uid, pubStr);
+                }
+            }
+            System.out.println("[游戏:广播] " + pubStr);
+        }
+    }
+
+    /** 去除玩家名中 AI 误加的括号内容，如 "张三（警察）" → "张三" */
+    private static String cleanPlayerName(String raw) {
+        int paren = raw.indexOf('（');
+        if (paren < 0) paren = raw.indexOf('(');
+        return paren > 0 ? raw.substring(0, paren).strip() : raw.strip();
+    }
+
+    /** 发送私信：通过玩家的 bot（存储在 GameSession 中），fallback 到发言者 bot */
+    private static void sendPrivate(String who, String msg, GameSession gs, ILinkBot speakerBot) {
+        String uid = gs.getUserId(who);
+        if (uid == null) return;
+        String botName = gs.getPlayerBot(who);
+        ILinkBot target = botName != null ? cluster.getBot(botName) : null;
+        if (target != null) {
+            target.sendText(uid, "📨 " + msg);
+        } else {
+            speakerBot.sendText(uid, "📨 " + msg);
+        }
+        System.out.println("[游戏:私信] → " + who + ": " + msg.substring(0, Math.min(60, msg.length())) + "...");
+    }
+
+    /** 广播玩家发言给其他玩家（不包含说话者自己） */
+    private static void broadcastPlayerMessage(GameSession gs, String speakerName, String text,
+                                                ILinkBot speakerBot) {
+        for (String name : gs.playerNames()) {
+            if (name.equals(speakerName)) continue; // 跳过说话者自己
+            String uid = gs.getUserId(name);
+            if (uid == null) continue;
+            String botName = gs.getPlayerBot(name);
+            ILinkBot target = botName != null ? cluster.getBot(botName) : speakerBot;
+            target.sendText(uid, "💬 " + speakerName + "：" + text);
+        }
+        System.out.println("[游戏:广播发言] " + speakerName + "：" + text);
+    }
 
     /** 从 AiService 中获取 BotState 缓存 */
     private static BotState botState(AiService ai) {

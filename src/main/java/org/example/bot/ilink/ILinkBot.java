@@ -173,13 +173,7 @@ public class ILinkBot {
     // ---- 发送 ----
     public void sendText(String userId, String text) {
         try { client.sendText(userId, text); }
-        catch (Exception e) { System.err.println("[iLink:" + name + "] ⚠ 发送失败: " + e.getMessage()); }
-    }
-
-    /** 强校验发送 — 所有异常都视为失败 */
-    public boolean sendTextChecked(String userId, String text) {
-        try { client.sendText(userId, text); return true; }
-        catch (Exception e) { return false; }
+        catch (IOException e) { System.err.println("[iLink:" + name + "] ⚠ 发送失败: " + e.getMessage()); }
     }
 
     public void sendTextWithTyping(String userId, String text, long typingMillis) {

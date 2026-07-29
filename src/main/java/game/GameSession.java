@@ -22,6 +22,7 @@ public class GameSession {
     private final AiService ai;
     private final Map<String, String> nameById = new LinkedHashMap<>(); // userId → 玩家名
     private final Map<String, String> roleByName = new LinkedHashMap<>(); // 玩家名 → 角色
+    private final Map<String, String> playerBotName = new LinkedHashMap<>(); // 玩家名 → bot名
     private final List<String> history = new ArrayList<>(); // 共享对话历史
     private final String gameUserId = "game-" + System.currentTimeMillis(); // 游戏专用虚拟用户
 
@@ -41,15 +42,21 @@ public class GameSession {
     /** 绑定微信 userId 到玩家名（玩家第一次发言时绑定） */
     public void bindUser(String userId, String playerName) {
         nameById.put(userId, playerName);
-        // 同时加入角色表，确保引擎 start() 能看到所有玩家
-        if (!roleByName.containsKey(playerName)) {
-            roleByName.put(playerName, null);
-        }
     }
 
     /** 设置玩家角色（由引擎在 start 时调用） */
     public void setRole(String playerName, String role) {
         roleByName.put(playerName, role);
+    }
+
+    /** 记录玩家使用的 bot 名（用于跨 bot 发消息） */
+    public void setPlayerBot(String playerName, String botName) {
+        playerBotName.put(playerName, botName);
+    }
+
+    /** 获取玩家对应的 bot 名 */
+    public String getPlayerBot(String playerName) {
+        return playerBotName.get(playerName);
     }
 
     /** userId → 玩家名 */
@@ -94,9 +101,11 @@ public class GameSession {
         String tag = name + (role != null ? "(" + role + ")" : "");
         history.add("[" + tag + "] " + text);
 
-        // 构建完整上下文：系统提示 + 玩家名单 + 角色分配 + 对话历史
+        // 构建完整上下文：系统提示 + 引擎状态 + 玩家名单 + 对话历史
         StringBuilder ctx = new StringBuilder();
         ctx.append(engine.systemPrompt()).append("\n\n");
+        String state = engine.stateContext();
+        if (!state.isEmpty()) ctx.append(state).append("\n\n");
         ctx.append("当前玩家：\n");
         for (String n : playerNames()) {
             String r = roleByName.get(n);
@@ -120,27 +129,19 @@ public class GameSession {
         return reply;
     }
 
-    /** GameEngine 直接调用 DeepSeek（不分发到玩家），用于开场白等内部逻辑 */
+    /** GameEngine 直接调用 DeepSeek，用于夜晚阶段等内部逻辑 */
     public String prompt(String promptText) {
-        StringBuilder ctx = new StringBuilder();
-        ctx.append(engine.systemPrompt()).append("\n\n");
-        ctx.append("当前玩家：\n");
-        for (String n : playerNames()) {
-            String r = roleByName.get(n);
-            ctx.append("  ").append(n);
-            if (r != null) ctx.append("（").append(r).append("）");
-            ctx.append("\n");
-        }
-        if (!history.isEmpty()) {
-            ctx.append("\n游戏对话记录：\n");
-            for (String h : history) {
-                ctx.append(h).append("\n");
-            }
-        }
-        ctx.append("\n").append(promptText);
-        String reply = ai.chat(gameUserId, ctx.toString());
-        history.add("[主持人] " + reply);  // 单独存，和 process() 格式一致
+        String reply = ai.chat(gameUserId, promptText);
+        history.add("[系统] " + promptText + "\n[主持人] " + reply);
         return reply;
+    }
+
+    /** 玩家名 → userId（供外部发私信用） */
+    public String getUserId(String playerName) {
+        for (var e : nameById.entrySet()) {
+            if (e.getValue().equals(playerName)) return e.getKey();
+        }
+        return null;
     }
 
     /** 清空 GameUserId 的对话历史（避免跨游戏污染） */
