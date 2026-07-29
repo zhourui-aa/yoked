@@ -37,3 +37,5 @@
 /.cp
 /.cp3.txt
 *.class
+.DS_Store
+._*
