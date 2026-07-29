@@ -1,44 +1,39 @@
-target/
-!.mvn/wrapper/maven-wrapper.jar
-!**/src/main/**/target/
-!**/src/test/**/target/
-.kotlin
+# 默认忽略的文件
+/shelf/
+/workspace.xml
+# 基于编辑器的 HTTP 客户端请求
+/httpRequests/
+# 已忽略包含查询文件的默认文件夹
+/queries/
+# Datasource local storage ignored files
+/dataSources/
+/dataSources.local.xml
 
-### IntelliJ IDEA ###
-.idea/modules.xml
-.idea/jarRepositories.xml
-.idea/compiler.xml
-.idea/libraries/
-*.iws
-*.iml
-*.ipr
+# 编译输出（包含 secrets 的目录）
+/target/
+/out/
+/build/
 
-### Eclipse ###
-.apt_generated
-.classpath
-.factorypath
-.project
-.settings
-.springBeans
-.sts4-cache
+# 本地配置（含真实 API keys，绝不能上传）
+/config.properties
+/src/main/resources/config.properties
 
-### NetBeans ###
-/nbproject/private/
-/nbbuild/
-/dist/
-/nbdist/
-/.nb-gradle/
-build/
-!**/src/main/**/build/
-!**/src/test/**/build/
+# 测试文件
+/Test*.java
+/Test*.class
+/CreateDB.java
+/CreateDB.class
 
-### VS Code ###
-.vscode/
+# 数据库文件
+/*.db
+/*.db-wal
+/*.db-shm
 
-### Mac OS ###
-.DS_Store
+# IDE 配置
+/.idea/
+/.vscode/
 
-### Secrets ###
-config.properties
-docs/presentation.html
-yoked.db
+# 临时文件
+/.cp
+/.cp3.txt
+*.class
