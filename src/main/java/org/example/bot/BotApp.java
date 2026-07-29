@@ -49,6 +49,14 @@ import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
 import org.example.bot.impl.SqliteDatabaseServiceImpl;
+import org.example.bot.skill.SkillManager;
+import org.example.bot.rag.ChatHistoryRetriever;
+import org.example.bot.rag.DocumentRetriever;
+import org.example.bot.rag.EmbeddingService;
+import org.example.bot.rag.LocalEmbeddingService;
+import org.example.bot.rag.RAGPipeline;
+import org.example.bot.rag.VectorStore;
+import org.example.bot.util.ConfigUtil;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.tools.ToolCondition;
 import org.example.bot.tools.ToolDefinition;
@@ -102,6 +110,10 @@ public class BotApp {
     private static final MusicService music = new MusicServiceImpl();
     /** 工具中心 — 统一管理所有 FC 工具定义、注册和条件评估 */
     private static final ToolCenter toolCenter = new ToolCenter();
+    /** Skill 管理器 — 扫描 src/skills/ 自动加载 .md */
+    private static final SkillManager skillManager = new SkillManager("src/skills");
+    /** RAG 管道 — 检索聊天历史增强上下文 */
+    private static final RAGPipeline ragPipeline = new RAGPipeline(5);
     /** Bot 集群 — 支持多微信号同时在线，运行时可通过命令动态新建 */
     private static BotCluster cluster;
 
@@ -137,6 +149,22 @@ public class BotApp {
         });
 
         AiService ai = new DeepSeekAiServiceImpl(DEFAULT_PERSONA, TECH_INSTRUCTIONS, db);
+
+        // 扫描 src/skills/ 加载所有 .md Skill
+        int loaded = skillManager.loadFromDir();
+        System.out.println("[Skill] 已从 src/skills/ 加载 " + loaded + " 个 Skill");
+
+        // 初始化 RAG 管道
+        String dbFile = ConfigUtil.get("sqlite.db.path", "SQLITE_DB_PATH");
+        if (dbFile == null || dbFile.isBlank()) dbFile = "yoked.db";
+        EmbeddingService embedder = new LocalEmbeddingService(256);
+        VectorStore vectorStore = new VectorStore(dbFile, embedder);
+        ragPipeline.addRetriever(new ChatHistoryRetriever(db));
+        DocumentRetriever docRetriever = new DocumentRetriever(vectorStore);
+        int docChunks = docRetriever.indexDirectory("docs");
+        ragPipeline.addRetriever(docRetriever);
+        System.out.println("[RAG] 向量存储: " + vectorStore.count() + " 条（含文档 " + docChunks + " 条）");
+        System.out.println(ragPipeline.summary());
         WeatherBotService weather = WeatherBotService.create();
 
         ImageGenService imageGen = null;
@@ -192,6 +220,7 @@ public class BotApp {
         // ---- 向工具中心注册所有 FC 工具 ----
         registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db, scheduler);
         System.out.println(toolCenter.summary());
+        System.out.println(skillManager.summary());
 
         // ---- 捕获为 final 变量供 lambda 使用 ----
         final ImageGenService fImageGen = imageGen;
@@ -323,7 +352,10 @@ public class BotApp {
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
 
-        // ② 语音意图 — 关键词命中即生效（不再额外调 AI 确认）
+        // ② Skill 预处理 — 命中则短路，跳过 AI 调用
+        if (skillManager.preProcess(userId, text, bot)) return;
+
+        // ③ 语音意图 — 关键词命中即生效（不再额外调 AI 确认）
         boolean wantsVoice = forceVoice
             || (tts != null && containsKeyword(text, VOICE_REPLY_KEYWORDS));
         if (wantsVoice) System.out.println("[Bot] 🔊 语音回复");
@@ -334,10 +366,19 @@ public class BotApp {
             = new java.util.LinkedHashMap<>();
         buildTools(tools, executors, bot, ai, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, userId);
 
-        // ④ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
+        // ④ RAG 检索 + Skill 上下文增强 — 在调 AI 之前注入
+        String ragContext = ragPipeline.augment(userId, text);
+        String skillAug = skillManager.augmentContext(userId, text);
+        StringBuilder extra = new StringBuilder();
+        if (!ragContext.isEmpty()) extra.append(ragContext).append("\n");
+        if (!skillAug.isEmpty()) extra.append(skillAug).append("\n");
+        String finalText = extra.isEmpty() ? text : text + "\n\n【参考信息】\n" + extra.toString().strip();
+
+        // ⑤ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
-            String fcResult = ai.chatWithTools(userId, text, tools, executors);
+            String fcResult = ai.chatWithTools(userId, finalText, tools, executors);
             if (fcResult != null) {
+                fcResult = skillManager.postProcess(userId, fcResult);
                 System.out.println("[回复] " + fcResult);
                 bot.sendTextWithTyping(userId, fcResult, 500L);
                 if (wantsVoice || isVoiceMode(ai, userId))
@@ -346,9 +387,10 @@ public class BotApp {
             }
         }
 
-        // ⑤ 降级：AI 自由对话
+        // ⑥ 降级：AI 自由对话
         System.out.println("[Bot] → AI 对话");
-        String reply = ai.chat(userId, text);
+        String reply = ai.chat(userId, finalText);
+        reply = skillManager.postProcess(userId, reply);
         System.out.println("[回复] " + reply);
         bot.sendTextWithTyping(userId, reply, 500L);
         if (wantsVoice || isVoiceMode(ai, userId))
