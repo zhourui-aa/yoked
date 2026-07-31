@@ -213,32 +213,24 @@ public class GameCommand {
         return "✅ 玩家" + n + "「" + botName + "」已准备！（" + n + "/" + lobby.slots + "）";
     }
 
-    /** 发送积攒的私信块 — 必须用玩家自己的 bot */
+    /** 发送积攒的私信块 — 用 userBotMap 找正确 bot */
     private static void flushPrivate(String who, StringBuilder msg, ILinkBot fallback,
                                       GameSession session, BotCluster cluster, boolean addPrefix) {
         if (who == null || msg.isEmpty()) return;
         String text = msg.toString().strip();
         String uid = session.getUserId(who);
         if (uid == null) { msg.setLength(0); return; }
-        ILinkBot playerBot = cluster.getBot(who);
         String prefix = addPrefix ? "📨 " : "";
-        (playerBot != null ? playerBot : fallback).sendText(uid, prefix + text);
-        System.out.println("[游戏:私信] → " + who + " (" + text.length() + "字符) bot="
-            + (playerBot != null ? playerBot.name() : fallback.name()));
+        System.out.println("[游戏:私信] → " + who + " (" + text.length() + "字符)");
+        cluster.sendToUser(uid, prefix + text);
         msg.setLength(0);
     }
 
-    /** 发送文本给玩家，自动选正确的 bot */
+    /** 发送文本给玩家，用 userBotMap 自动选正确 bot */
     private static void sendToPlayer(String who, String uid, String text, ILinkBot fallback,
                                       BotCluster cluster) {
-        ILinkBot pb = cluster.getBot(who);
-        if (pb != null) {
-            pb.sendText(uid, text);
-        } else {
-            fallback.sendText(uid, text);
-        }
-        System.out.println("[游戏:发送] → " + who + " bot="
-            + (pb != null ? pb.name() : fallback.name()));
+        System.out.println("[游戏:发送] → " + who);
+        cluster.sendToUser(uid, text);
     }
 
     /** 启动游戏 */
@@ -348,8 +340,15 @@ public class GameCommand {
         }
 
         // ═══ 通知所有玩家游戏开始 ═══
-        String startMsg = "🎮 「" + lobby.engine.name() + "」开始！" + names.length + "位玩家。\n"
-            + "💬 你的发言会自动广播给所有玩家。说「我要搜证」获取线索（每人3次）。";
+        String engineName = lobby.engine.name();
+        String startMsg;
+        if ("谁是卧底".equals(engineName)) {
+            startMsg = "🎮 「" + engineName + "」开始！" + names.length + "位玩家。\n"
+                + "💬 你的发言会自动广播给所有玩家。按顺序描述你的词语即可。";
+        } else {
+            startMsg = "🎮 「" + engineName + "」开始！" + names.length + "位玩家。\n"
+                + "💬 你的发言会自动广播给所有玩家。说「我要搜证」获取线索（每人3次）。";
+        }
         for (var e : lobby.boundMap().entrySet()) {
             sendToPlayer(e.getKey(), e.getValue(), startMsg, bot, cluster);
         }

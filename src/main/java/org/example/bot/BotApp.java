@@ -242,8 +242,9 @@ public class BotApp {
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
-            String userId = msg.userId();
-            ILinkBot bot = BotCluster.current();
+            try {
+                String userId = msg.userId();
+                ILinkBot bot = BotCluster.current();
 
             // 游戏大厅自动绑定 + 通知
             if (GameRegistry.hasLobby() && bot != null) {
@@ -251,7 +252,9 @@ public class BotApp {
                     String notify = GameCommand.onBotBound(bot.name());
                     System.out.println("[大厅] " + bot.name() + " 已扫码");
                     if (notify != null) {
-                        bot.sendText(GameRegistry.lobby().creatorId, notify);
+                        // 用 sendToUser 而不是 bot.sendText，因为当前 bot（QR用户bot）
+                        // 跟 creator 不是好友，无法直接发消息
+                        cluster.sendToUser(GameRegistry.lobby().creatorId, notify);
                     }
                     // 人齐自动开始
                     if (GameRegistry.hasLobby() && GameRegistry.lobby().allBound()) {
@@ -289,6 +292,10 @@ public class BotApp {
             System.out.println("[收到] " + userId + " : " + text);
             processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader,
                                userId, text, false);
+        } catch (Exception e) {
+            System.err.println("[Bot] ⚠ 消息处理异常: " + e.getMessage());
+            e.printStackTrace();
+        }
         });
 
         System.out.println("\n[Bot] 🟢 等待扫码登录...（按 Ctrl+C 退出）\n");
@@ -1274,17 +1281,11 @@ public class BotApp {
 
         String pubStr = pub.toString().strip();
         if (!pubStr.isEmpty()) {
-            // 广播：每个玩家用自己对应的 bot 接收
+            // 广播给所有玩家：用 userBotMap 找每个用户对应的 bot 发送
             for (String name : gs.playerNames()) {
                 String uid = gs.getUserId(name);
                 if (uid == null) continue;
-                String botName = gs.getPlayerBot(name);
-                ILinkBot targetBot = botName != null ? cluster.getBot(botName) : null;
-                if (targetBot != null) {
-                    targetBot.sendText(uid, pubStr);
-                } else {
-                    speakerBot.sendText(uid, pubStr);
-                }
+                cluster.sendToUser(uid, pubStr);
             }
             System.out.println("[游戏:广播] " + pubStr);
         }
@@ -1297,30 +1298,22 @@ public class BotApp {
         return paren > 0 ? raw.substring(0, paren).strip() : raw.strip();
     }
 
-    /** 发送私信：通过玩家的 bot（存储在 GameSession 中），fallback 到发言者 bot */
+    /** 发送私信：用 userBotMap 找正确的 bot */
     private static void sendPrivate(String who, String msg, GameSession gs, ILinkBot speakerBot) {
         String uid = gs.getUserId(who);
         if (uid == null) return;
-        String botName = gs.getPlayerBot(who);
-        ILinkBot target = botName != null ? cluster.getBot(botName) : null;
-        if (target != null) {
-            target.sendText(uid, "📨 " + msg);
-        } else {
-            speakerBot.sendText(uid, "📨 " + msg);
-        }
         System.out.println("[游戏:私信] → " + who + ": " + msg.substring(0, Math.min(60, msg.length())) + "...");
+        cluster.sendToUser(uid, "📨 " + msg);
     }
 
     /** 广播玩家发言给其他玩家（不包含说话者自己） */
     private static void broadcastPlayerMessage(GameSession gs, String speakerName, String text,
                                                 ILinkBot speakerBot) {
         for (String name : gs.playerNames()) {
-            if (name.equals(speakerName)) continue; // 跳过说话者自己
+            if (name.equals(speakerName)) continue;
             String uid = gs.getUserId(name);
             if (uid == null) continue;
-            String botName = gs.getPlayerBot(name);
-            ILinkBot target = botName != null ? cluster.getBot(botName) : speakerBot;
-            target.sendText(uid, "💬 " + speakerName + "：" + text);
+            cluster.sendToUser(uid, "💬 " + speakerName + "：" + text);
         }
         System.out.println("[游戏:广播发言] " + speakerName + "：" + text);
     }
