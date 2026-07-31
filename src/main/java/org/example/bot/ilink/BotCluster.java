@@ -3,25 +3,11 @@ package org.example.bot.ilink;
 import org.example.bot.model.BotMessage;
 
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 /**
- * Bot 集群 — 管理多个 ILinkBot 实例（每个对应一个微信号），
- * 支持启动时批量添加 + 运行时通过命令动态新增。
- *
- * <h3>使用方式</h3>
- * <pre>
- *   BotCluster cluster = new BotCluster();
- *   cluster.addBot("客服号");
- *   cluster.setHandler(msg -> { ... });
- *   cluster.awaitLogins();
- *   // 运行时可通过命令: cluster.addBot("新号");
- * </pre>
+ * Bot 集群 — 管理多个 ILinkBot 实例（每个对应一个微信号）。
  */
 public class BotCluster {
 
@@ -32,6 +18,9 @@ public class BotCluster {
     private CountDownLatch initialLatch = new CountDownLatch(0);
 
     private static final ThreadLocal<ILinkBot> CURRENT_BOT = new ThreadLocal<>();
+
+    /** userId → 能向该用户发消息的 bot（该 bot 与该 userId 有过消息记录） */
+    private final ConcurrentHashMap<String, ILinkBot> userBotMap = new ConcurrentHashMap<>();
 
     /** 获取当前处理消息的 bot */
     public static ILinkBot current() {
@@ -46,23 +35,19 @@ public class BotCluster {
         }
     }
 
-    /** 初始化阶段批量添加（会追踪 CountDownLatch） */
+    /** 初始化阶段批量添加 */
     public void addBot(String name) {
-        addBotInternal(name, true);
+        addBotInternal(name, true, null);
     }
 
-    /** 运行时动态添加（不参与 CountDownLatch） */
+    /** 运行时动态添加 */
     public void addBotDynamic(String name) {
-        addBotInternal(name, false);
+        addBotInternal(name, false, null);
     }
 
-    /** 运行时动态添加，登录成功后执行回调（用于大厅自动绑定） */
+    /** 运行时动态添加，登录成功后执行回调 */
     public void addBotDynamic(String name, Runnable onLogin) {
         addBotInternal(name, false, onLogin);
-    }
-
-    private void addBotInternal(String name, boolean countDown) {
-        addBotInternal(name, countDown, null);
     }
 
     private void addBotInternal(String name, boolean countDown, Runnable onLogin) {
@@ -76,14 +61,12 @@ public class BotCluster {
         System.out.println("  🤖 Bot [" + name + "] — 请用微信扫码登录");
         System.out.println("=".repeat(60));
 
-        // 如果初始化阶段，扩大 CountDownLatch
         if (countDown) {
             CountDownLatch old = initialLatch;
             initialLatch = new CountDownLatch((int) old.getCount() + 1);
         }
 
         loginExecutor.submit(() -> {
-            // 短暂间隔避免多个二维码同时打印重叠
             try { Thread.sleep(300); } catch (InterruptedException ignored) {}
             try {
                 bot.login();
@@ -97,7 +80,6 @@ public class BotCluster {
             }
         });
 
-        // 小延迟让二维码完整输出
         try { Thread.sleep(500); } catch (InterruptedException ignored) {}
     }
 
@@ -105,6 +87,8 @@ public class BotCluster {
         final Consumer<BotMessage> h = this.handler;
         bot.setHandler(msg -> {
             CURRENT_BOT.set(bot);
+            // 记录用户 → bot 映射（用于跨 bot 发消息）
+            userBotMap.put(msg.userId(), bot);
             try {
                 h.accept(msg);
             } finally {
@@ -119,16 +103,23 @@ public class BotCluster {
 
     /** 阻塞等待初始化阶段添加的所有 bot 登录完成 */
     public void awaitLogins() {
-        try {
-            initialLatch.await(30, TimeUnit.MINUTES);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        try { initialLatch.await(30, TimeUnit.MINUTES); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
 
-    /** 按名称查找 bot（供定时任务等后台线程使用） */
+    /** 按名称查找 bot */
     public ILinkBot getBot(String name) {
         return bots.stream().filter(b -> b.name().equals(name)).findFirst().orElse(null);
+    }
+
+    /**
+     * 向指定用户发消息：只用 userBotMap 记录的 bot（避免跨 bot SDK 冲突）。
+     * 没映射就遍历所有 bot 找一个能发的。
+     */
+    public void sendToUser(String userId, String text) {
+        ILinkBot bot = userBotMap.get(userId);
+        if (bot != null) { bot.sendText(userId, text); return; }
+        for (ILinkBot b : bots) b.sendText(userId, text);
     }
 
     /** 关闭所有 bot */

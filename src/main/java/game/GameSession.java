@@ -131,7 +131,9 @@ public class GameSession {
 
     /** GameEngine 直接调用 DeepSeek，用于夜晚阶段等内部逻辑 */
     public String prompt(String promptText) {
-        String reply = ai.chat(gameUserId, promptText);
+        // 把 systemPrompt 作为系统消息注入，确保 AI 按游戏规则回复
+        String fullPrompt = engine.systemPrompt() + "\n\n" + promptText;
+        String reply = ai.chat(gameUserId, fullPrompt);
         history.add("[系统] " + promptText + "\n[主持人] " + reply);
         return reply;
     }

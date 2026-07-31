@@ -171,14 +171,24 @@ public class ILinkBot {
     }
 
     // ---- 发送 ----
+    /** 发送消息，失败快速重试1次 */
     public void sendText(String userId, String text) {
-        try { client.sendText(userId, text); }
-        catch (IOException e) { System.err.println("[iLink:" + name + "] ⚠ 发送失败: " + e.getMessage()); }
+        try { client.sendText(userId, text); return; }
+        catch (Exception e1) {
+            try { Thread.sleep(100); client.sendText(userId, text); }
+            catch (Exception e2) { /* 2次都失败，放弃 */ }
+        }
+    }
+
+    /** 静默尝试发送，成功返回 true，失败不打印 */
+    public synchronized boolean sendTextOk(String userId, String text) {
+        try { client.sendText(userId, text); return true; }
+        catch (Exception e) { return false; }
     }
 
     public void sendTextWithTyping(String userId, String text, long typingMillis) {
         try { client.sendTextWithTyping(userId, text, typingMillis); }
-        catch (IOException e) { System.err.println("[iLink:" + name + "] ⚠ 发送失败: " + e.getMessage()); }
+        catch (Exception e) { System.out.println("[iLink:" + name + "] ⚠ 发送失败: " + e.getMessage()); }
     }
 
     public void sendImage(String userId, byte[] imageBytes, String fileName, String caption) {
