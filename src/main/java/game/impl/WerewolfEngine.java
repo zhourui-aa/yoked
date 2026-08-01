@@ -21,6 +21,11 @@ public class WerewolfEngine implements GameEngine {
     private String sheriff;
     private boolean hunterCanShoot;
     private final Set<String> dead = new LinkedHashSet<>();
+    private String pendingAnnouncement; // handle() 返回的阶段公告
+    // 狼人共识
+    private String wolfProposal;           // 提议击杀目标
+    private String wolfProposer;           // 谁提议的
+    private final Set<String> wolfAgreed = new LinkedHashSet<>(); // 已同意的狼人
 
     // {狼人, 平民, 预言家, 女巫, 猎人}
     private static final int[][] ROLE_CFG = {
@@ -39,63 +44,58 @@ public class WerewolfEngine implements GameEngine {
     @Override public int minPlayers() { return 6; }
     @Override public int maxPlayers() { return 12; }
 
+    // ==================== 阶段机 ====================
+
+    /** 夜晚子阶段 */
+    public enum NightPhase { WOLVES, WITCH, SEER, DONE }
+    private NightPhase nightPhase = NightPhase.WOLVES;
+    public NightPhase getNightPhase() { return nightPhase; }
+
+    /** 检查玩家在夜间是否允许发言（只有当前活跃角色可以） */
+    public boolean canSpeakAtNight(String playerName, GameSession session) {
+        if (!night) return true; // 白天都可以
+        if (nightPhase == NightPhase.DONE) return false; // 夜晚结束但还没天亮
+        String role = session.playerRole(playerName);
+        return switch (nightPhase) {
+            case WOLVES -> "狼人".equals(role);
+            case WITCH -> "女巫".equals(role);
+            case SEER -> "预言家".equals(role);
+            default -> false;
+        };
+    }
+
+    /** 获取当前阶段允许发言的角色名 */
+    public String activeRoleName() {
+        if (!night) return "所有人";
+        return switch (nightPhase) {
+            case WOLVES -> "狼人";
+            case WITCH -> "女巫";
+            case SEER -> "预言家";
+            default -> "无";
+        };
+    }
+
     // ==================== 规则 ====================
 
     @Override
     public String systemPrompt() {
         int[] c = ROLE_CFG[playerCount - 6];
         return ("""
-            你是狼人杀主持人。%d人局：%d狼人、%d平民、预言家、女巫%s。
+            你是狼人杀主持人（仅负责狼人阶段）。%d人局：%d狼人、%d平民、预言家、女巫%s。
 
-            【私信格式铁则 — 极其重要！违反将导致玩家收不到私信！】
-            所有发给特定玩家的私密消息必须独占一行，使用以下格式：
-              【私信:玩家名】
-              消息内容...
-            正确示例：
-              【私信:张三】
-              你是狼人，你的同伴是李四。今晚你们要商量击杀目标。
-            错误示例（引擎无法识别！）：
-              ❌ 私信:张三 你是狼人  （缺少【】括号）
-              ❌ "私信张三你是狼人"  （缺少冒号和括号标记）
-            每条私信的【私信:玩家名】必须是行首第一个字，独占一行或后接内容都可以。
+            【你的唯一职责】监听狼人讨论，判断他们何时达成击杀共识。
+            当狼人统一目标后，输出【死者:XXX】和【狼人行动结束】。
+            不要在回复中加入任何其他文字——系统会自动处理所有玩家通信。
 
-            【铁则】绝不泄露任何玩家身份给其他玩家。
-            引擎内部标签（【死者:xxx】【解药已用】【毒药:xxx】【毒药已用】）会被系统自动过滤，玩家不可见。
-            不要依赖这些标签来向玩家传递信息——它们是给引擎读的，不是给玩家读的。
+            【禁止事项】
+            - 禁止使用【私信:XXX】标签
+            - 禁止替狼人做决定
+            - 禁止在狼人未达成一致时输出标签
 
-            【绝对禁止】天亮之前不得在公开频道透露任何死者信息！
-            死者身份在夜晚只能通过【私信:女巫名】告知女巫一人，禁止在公开文字中写出"今晚杀XXX"。
-
-            【屠边胜利】
-            - 好人胜：放逐全部狼人 → 游戏立即结束
-            - 狼人胜：所有神职(预言家+女巫%s)出局 或 所有平民出局 → 游戏立即结束
-            - 存活狼人数≥存活好人数 → 狼人立即胜利
-
-            【角色技能】
-            - 狼人：每夜统一投票选1人击杀。多数通过，平票=空刀(无人死亡)。禁止自刀/刀队友。
-            - 预言家：每夜查验1人，反馈"好人"或"狼人"。禁止自查/查死人。狼人+女巫行动后最后睁眼。
-            - 女巫：解药%s、毒药%s各1次。禁止自救、禁止同晚双开。解药救人>狼刀>毒药。用毒药时必须用【毒药:目标名】指明目标。
-            - 猎人%s：被刀/被投票出局可开枪带走1人。被女巫毒死禁止开枪。
-
-            【夜间流程】天黑→狼人睁眼刀人→闭眼→女巫睁眼用药→闭眼→预言家睁眼查验→闭眼→天亮。
-            全程闭眼：所有平民、猎人（永久不睁眼）。每次只处理当前角色的行动，等玩家回应后再推进下一步。
-            不要在一条回复中跨越多个夜间步骤。
-
-            【死亡结算】同夜狼刀+毒药→双死。空刀+无毒→平安夜。解药救人抵消狼刀。
-
-            【白天流程】
-            1. 天亮公布死者(首夜死亡无遗言，其余有遗言)→用自然语言宣布"昨晚xxx被杀"，同时输出【死者:xxx】给引擎（会被过滤）。若无死亡则输出【平安夜】（全员可见）。
-            2. 首日→警长竞选：上警发言投票，警长1.5票+最后发言→输出【警长:名字】
-            3. 自由讨论(广播)→投票放逐→平票PK再投→再平无人出局→被放逐者有遗言
-            4. 猎人在被放逐/被刀后→询问是否开枪
-
-            【一次只做一步】每次只处理当前步骤，等玩家回应再继续。不在同一条回复中跨越多个步骤。
-
-            【状态指令】回复中必须包含引擎标签（会被过滤，玩家不可见）：【死者:xxx】【解药已用】【毒药:xxx】【毒药已用】。玩家可见标签：【平安夜】【警长:xxx】【游戏结束:理由】
+            【状态指令（仅输出这些）】【死者:XXX】【狼人行动结束】
             """)
             .formatted(playerCount, c[IDX_WOLF], c[IDX_CIV],
                 c[IDX_HUNTER] > 0 ? "、猎人" : "",
-                c[IDX_HUNTER] > 0 ? "+猎人" : "",
                 witchAntidoteUsed ? "已用" : "○", witchPoisonUsed ? "已用" : "○",
                 c[IDX_HUNTER] > 0 ? "" : "(本局无)");
     }
@@ -127,6 +127,9 @@ public class WerewolfEngine implements GameEngine {
         playerCount = session.playerNames().size();
         int[] c = ROLE_CFG[playerCount - 6];
         over = false; round = 1; night = true;
+        nightPhase = NightPhase.WOLVES;
+        pendingAnnouncement = null;
+        wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
         witchAntidoteUsed = false; witchPoisonUsed = false;
         antidoteUsedThisRound = false;
         wolfKillTarget = null; witchPoisonTarget = null;
@@ -144,50 +147,193 @@ public class WerewolfEngine implements GameEngine {
             rl.append("  ").append(n).append(" → ").append(session.playerRole(n)).append("\n");
         }
         System.out.println("[狼人杀] " + playerCount + "人\n" + rl);
-        return """
-            角色已分配：
-            %s
-            请用【私信:玩家名】告知每位玩家身份。狼人要告知同伴是谁。
-            只说自己的身份，不透露他人角色。告知完毕后输出"角色通知完毕"。""".formatted(rl.toString());
+        // 角色由系统直接私发，不经过 AI 生成角色卡
+        return null;
     }
 
-    /** 角色分配完后启动第一夜 */
+    /** 生成玩家的角色卡文本（系统直发，不依赖 AI） */
+    public String buildRoleCard(String playerName) {
+        GameSession gs = GameRegistry.session();
+        String role = gs != null ? gs.playerRole(playerName) : null;
+        if (role == null) return "身份信息缺失";
+        StringBuilder sb = new StringBuilder();
+        sb.append("🃏 你的身份是：").append(role).append("\n\n");
+        switch (role) {
+            case "狼人" -> {
+                java.util.List<String> partners = new java.util.ArrayList<>();
+                if (gs != null) for (String n : gs.playerNames()) {
+                    if ("狼人".equals(gs.playerRole(n)) && !n.equals(playerName))
+                        partners.add(n);
+                }
+                sb.append(partners.isEmpty()
+                    ? "你是独狼。\n"
+                    : "你的同伴是：" + String.join("、", partners) + "。\n");
+                sb.append("每晚和同伴商量击杀一名玩家。多数通过，平票则空刀（无人死亡）。\n");
+                sb.append("禁止自刀或刀队友。");
+            }
+            case "平民" -> sb.append("你没有特殊技能。好好推理，找出狼人，投票放逐他们。");
+            case "预言家" -> sb.append("每晚可以查验一名玩家的身份（反馈「好人」或「狼人」）。\n禁止自查或查死人。");
+            case "女巫" -> sb.append("你有一瓶解药和一瓶毒药，各只能使用一次。\n解药不能自救。解药和毒药不能在同一晚使用。");
+            case "猎人" -> sb.append("被狼人杀死或被投票放逐时，可以开枪带走一名玩家。\n但被女巫毒死时不能开枪。");
+        }
+        return sb.toString();
+    }
+
+    /** 角色分配完后启动第一夜——狼人阶段 */
     public String nightTrigger() {
-        return """
-            现在是第1夜🌙。严格按照以下三步执行，每步只做一个角色的行动，绝不跳步！
+        return "现在是第" + round + "夜🌙。等待狼人讨论击杀目标。统一后输出【死者:XXX】【狼人行动结束】。不要加入其他文字。";
+    }
 
-            ⚠️ 核心规则：
-            - 天亮前绝不公开死者身份！死者信息只能通过【私信:女巫】告知！
-            - 每条私信用【私信:玩家名】独占一行开头！
+    // ==================== 狼人共识（系统驱动） ====================
 
-            === 第1步：狼人行动 ===
-            向全体公告："狼人请睁眼。"
-            现在等待狼人们在群内讨论击杀目标（你是主持人，你只需等待和观察，不要在狼人讨论中插话）。
-            当存活狼人统一目标后，输出【死者:XXX】（引擎标签，会被过滤，玩家不可见）。
-            然后用【私信:女巫名】告知女巫："今晚死者是XXX"（只有女巫能看到）。
-            公告："狼人请闭眼。"
+    /**
+     * 处理狼人阶段指令。返回结果消息，null=普通聊天（广播给同伴即可）。
+     */
+    public String handleWolfCommand(String speaker, String text, GameSession session) {
+        String cmd = text.strip();
+        // 提议击杀
+        if (cmd.startsWith("杀") || cmd.startsWith("杀 ")) {
+            String target = cmd.startsWith("杀 ") ? cmd.substring(2).strip() : cmd.substring(1).strip();
+            if (target.isEmpty()) return "❌ 请输入「杀 玩家名」。";
+            if (!session.playerNames().contains(target)) return "❌ 没有这个玩家。";
+            if (!isPlayerAlive(target)) return "❌ " + target + " 已经死了。";
+            if ("狼人".equals(session.playerRole(target))) return "❌ 不能杀狼人同伴。";
+            wolfProposal = target;
+            wolfProposer = speaker;
+            wolfAgreed.clear();
+            wolfAgreed.add(speaker);
+            // 告诉其他狼人
+            StringBuilder sb = new StringBuilder();
+            sb.append("🐺 ").append(speaker).append(" 提议击杀 ").append(target).append("。\n");
+            sb.append("其他狼人请回复「同意」或「不同意」。");
+            return sb.toString();
+        }
+        // 同意
+        if (cmd.equals("同意")) {
+            if (wolfProposal == null) return "❌ 还没有人提议击杀目标。";
+            if (wolfAgreed.contains(speaker)) return "❌ 你已经同意过了。";
+            wolfAgreed.add(speaker);
+            // 检查是否所有狼人都同意
+            long wolfCount = session.playerNames().stream()
+                .filter(n -> "狼人".equals(session.playerRole(n)) && isPlayerAlive(n)).count();
+            if (wolfAgreed.size() >= wolfCount) {
+                // 共识达成
+                String target = wolfProposal;
+                if (!dead.contains(target)) {
+                    dead.add(target);
+                    if (wolfKillTarget == null) wolfKillTarget = target;
+                }
+                wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                nightPhase = NightPhase.WITCH;
+                return "✅ 狼人一致同意击杀 " + target + "。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+            }
+            return "✅ 你已同意击杀 " + wolfProposal + "。（" + wolfAgreed.size() + "/" + wolfCount + "）";
+        }
+        // 不同意
+        if (cmd.equals("不同意") || cmd.equals("反对")) {
+            if (wolfProposal == null) return "❌ 还没有人提议击杀目标。";
+            wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+            return "🔄 提议被否决。请重新讨论击杀目标。";
+        }
+        return null; // 普通聊天
+    }
 
-            === 第2步：女巫行动 ===
-            公告："女巫请睁眼。"
-            用【私信:女巫名】告知死者（如果狼人空刀则说平安夜），询问是否使用解药/毒药。
-            等待女巫回应。
-            用解药→输出【解药已用】。用毒药→输出【毒药:目标名】和【毒药已用】。
-            公告："女巫请闭眼。"
+    /** 告知女巫死者信息（系统直发） */
+    public String witchInfoMessage() {
+        String target = wolfKillTarget;
+        if (target != null && dead.contains(target)) {
+            return "🔮 今晚死者是 " + target + "。\n输入「救」使用解药，输入「毒 玩家名」使用毒药，输入「不用」跳过。";
+        }
+        return "🔮 今晚是平安夜，无人死亡。\n输入「毒 玩家名」使用毒药，输入「不用」跳过。";
+    }
 
-            === 第3步：预言家行动 ===
-            公告："预言家请睁眼。"
-            用【私信:预言家名】询问查验谁，等待预言家指定目标后，用【私信:预言家名】告知"好人"或"狼人"。
-            公告："预言家请闭眼。"
+    /**
+     * 解析女巫指令，应用效果，返回结果消息（null=无效指令）
+     * @return 发给女巫的确认消息 + 阶段公告拼接
+     */
+    public String handleWitchCommand(String text, GameSession session) {
+        String cmd = text.strip();
+        // 解药
+        if (cmd.equals("救")) {
+            if (witchAntidoteUsed) return "❌ 解药已用过。";
+            if (wolfKillTarget == null || !dead.contains(wolfKillTarget)) return "❌ 今晚没有死者，无需使用解药。";
+            witchAntidoteUsed = true;
+            antidoteUsedThisRound = true;
+            System.out.println("[狼人杀] 女巫使用解药，救活 " + wolfKillTarget);
+            return advanceToSeer();
+        }
+        // 毒药
+        if (cmd.startsWith("毒")) {
+            if (witchPoisonUsed) return "❌ 毒药已用过。";
+            String target = cmd.substring(1).strip();
+            if (target.isEmpty()) return "❌ 请输入「毒 玩家名」。";
+            if (!session.playerNames().contains(target)) return "❌ 没有这个玩家。";
+            if (!isPlayerAlive(target)) return "❌ " + target + " 已经死了。";
+            witchPoisonUsed = true;
+            witchPoisonTarget = target;
+            System.out.println("[狼人杀] 女巫使用毒药，毒杀 " + target);
+            return "✅ 你决定毒杀 " + target + "。\n" + advanceToSeer();
+        }
+        // 跳过
+        if (cmd.equals("不用")) {
+            System.out.println("[狼人杀] 女巫跳过");
+            return advanceToSeer();
+        }
+        return null; // 无效指令
+    }
 
-            三步全部完成后→公告"天亮了"+【进入白天】+公布昨晚死者（如"昨晚XXX被杀"）或【平安夜】。
+    /** 推进到预言家阶段，返回阶段公告 */
+    private String advanceToSeer() {
+        nightPhase = NightPhase.SEER;
+        return "🔮 女巫请闭眼。\n🔍 预言家请睁眼。";
+    }
 
-            ⚠️ 从现在开始只做第1步！等狼人讨论完再推进！""";
+    /**
+     * 处理预言家查验目标（系统查角色，不经过AI）
+     * @return 发给预言家的结果 + 阶段公告
+     */
+    public String handleSeerTarget(String text, GameSession session) {
+        String target = text.strip();
+        if (!session.playerNames().contains(target)) return "❌ 没有这个玩家，请重新输入。";
+        if (!isPlayerAlive(target)) return "❌ " + target + " 已经死了，请选择存活玩家。";
+        String role = session.playerRole(target);
+        String result = "狼人".equals(role) ? "【狼人】" : "【好人】";
+        // 推进到天亮
+        nightPhase = NightPhase.DONE;
+        night = false;
+        // 死亡结算（先记下目标再结算）
+        String wolfTarget = wolfKillTarget;
+        String poisonTarget = witchPoisonTarget;
+        if (antidoteUsedThisRound && wolfTarget != null) {
+            dead.remove(wolfTarget);
+            wolfTarget = null; // 被救活
+            System.out.println("[狼人杀] 解药救活");
+        }
+        if (poisonTarget != null && !dead.contains(poisonTarget)) {
+            dead.add(poisonTarget);
+            if ("猎人".equals(session.playerRole(poisonTarget))) hunterCanShoot = false;
+        }
+        // 构造天亮公告（只报今夜死者）
+        java.util.List<String> nightDead = new java.util.ArrayList<>();
+        if (wolfTarget != null) nightDead.add(wolfTarget);
+        if (poisonTarget != null && !poisonTarget.equals(wolfTarget)) nightDead.add(poisonTarget);
+        String dawnAnnounce = "🔍 预言家请闭眼。\n\n☀️ 天亮了！";
+        if (!nightDead.isEmpty()) {
+            dawnAnnounce += "\n昨晚 " + String.join("、", nightDead) + " 被杀。";
+        } else {
+            dawnAnnounce += "\n昨晚是平安夜，无人死亡。";
+        }
+        wolfKillTarget = null; witchPoisonTarget = null;
+        antidoteUsedThisRound = false;
+        return "🔍 查验结果：" + target + " 是 " + result + "。\n\n" + dawnAnnounce;
     }
 
     @Override
     public String handle(GameSession session, String userId, String text) {
+        pendingAnnouncement = null;
         for (String line : text.split("\n")) {
             line = line.strip();
+            // 引擎标签解析
             if (line.contains("【死者:")) {
                 String name = extractCmd(line, "【死者:");
                 if (name != null && !dead.contains(name)) {
@@ -202,41 +348,203 @@ public class WerewolfEngine implements GameEngine {
                 if (name != null) witchPoisonTarget = name;
             }
             if (line.contains("【警长:")) sheriff = extractCmd(line, "【警长:");
-            if (line.contains("进入白天") || line.contains("天亮了")) {
+            // 夜晚阶段切换
+            if (line.contains("【狼人行动结束】") && nightPhase == NightPhase.WOLVES
+                && wolfKillTarget != null) { // 必须有击杀目标才能结束
+                nightPhase = NightPhase.WITCH;
+                pendingAnnouncement = "🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+            }
+            if (line.contains("【女巫行动结束】") && nightPhase == NightPhase.WITCH) {
+                nightPhase = NightPhase.SEER;
+                pendingAnnouncement = "🔮 女巫请闭眼。\n🔍 预言家请睁眼。";
+            }
+            if (line.contains("【预言家行动结束】") && nightPhase == NightPhase.SEER) {
+                nightPhase = NightPhase.DONE;
                 night = false;
-                // 解药救人
+                // Apply night deaths
                 if (antidoteUsedThisRound && wolfKillTarget != null) {
                     dead.remove(wolfKillTarget);
                     System.out.println("[狼人杀] 解药救活 " + wolfKillTarget);
                 }
-                // 毒药杀人
                 if (witchPoisonTarget != null && !dead.contains(witchPoisonTarget)) {
                     dead.add(witchPoisonTarget);
                     if ("猎人".equals(session.playerRole(witchPoisonTarget))) hunterCanShoot = false;
-                    System.out.println("[狼人杀] 毒杀 " + witchPoisonTarget);
                 }
-                // 猎人被刀后也被狼刀标记，检查并禁枪
-                if (wolfKillTarget != null && dead.contains(wolfKillTarget)
-                    && "猎人".equals(session.playerRole(wolfKillTarget))
-                    && witchPoisonTarget == null) {
-                    hunterCanShoot = true; // 纯狼刀 → 可开枪
-                }
+                pendingAnnouncement = "🔍 预言家请闭眼。\n\n☀️ 天亮了！";
                 wolfKillTarget = null; witchPoisonTarget = null;
                 antidoteUsedThisRound = false;
             }
+            // 天亮
+            if (line.contains("进入白天") || line.contains("天亮了")) {
+                night = false;
+                if (nightPhase != NightPhase.DONE) {
+                    // AI直接跳过了阶段结束标签，强制执行死亡结算
+                    if (antidoteUsedThisRound && wolfKillTarget != null) {
+                        dead.remove(wolfKillTarget);
+                    }
+                    if (witchPoisonTarget != null && !dead.contains(witchPoisonTarget)) {
+                        dead.add(witchPoisonTarget);
+                        if ("猎人".equals(session.playerRole(witchPoisonTarget))) hunterCanShoot = false;
+                    }
+                    wolfKillTarget = null; witchPoisonTarget = null;
+                    antidoteUsedThisRound = false;
+                    nightPhase = NightPhase.DONE;
+                }
+            }
+            // 天黑（进入下一夜）
             if (line.contains("进入黑夜") || line.contains("天黑了")) {
                 night = true; round++;
+                nightPhase = NightPhase.WOLVES;
                 antidoteUsedThisRound = false;
                 wolfKillTarget = null; witchPoisonTarget = null;
+                wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                pendingAnnouncement = "🌙 天黑请闭眼。\n🐺 狼人请睁眼。";
             }
             if (line.contains("游戏结束")) over = true;
         }
-        return null;
+        return pendingAnnouncement;
     }
 
     @Override public boolean isNight() { return night; }
     @Override public boolean isOver() { return over; }
     @Override public boolean isPlayerAlive(String playerName) { return !dead.contains(playerName); }
+
+    // ==================== 白天阶段（系统驱动） ====================
+
+    //public enum DayPhase { NONE, SHERIFF_VOTE, DISCUSS, EXILE_VOTE, DONE }
+    public enum DayPhase { NONE, EXILE_VOTE, DONE } // 简化：去掉上警和讨论
+
+    private DayPhase dayPhase = DayPhase.NONE;
+    private final Map<String, String> activeVotes = new LinkedHashMap<>();
+    private java.util.List<String> voteOrder; // 投票顺序
+    private int currentVoterIdx;               // 当前轮到第几个
+
+    public DayPhase getDayPhase() { return dayPhase; }
+    public boolean isInVotePhase() { return dayPhase == DayPhase.EXILE_VOTE; }
+
+    /** 天亮后逐个叫名投票 */
+    public String beginDaytime() {
+        dayPhase = DayPhase.EXILE_VOTE;
+        activeVotes.clear();
+        GameSession gs = GameRegistry.session();
+        voteOrder = new java.util.ArrayList<>();
+        if (gs != null) for (String n : gs.playerNames()) {
+            if (isPlayerAlive(n)) voteOrder.add(n);
+        }
+        currentVoterIdx = 0;
+        if (voteOrder.isEmpty()) return "☀️ 天亮了！没有存活玩家。";
+        return "☀️ 天亮了！开始放逐投票。\n🗳 " + voteOrder.get(0) + " 请投票，说出你要放逐的玩家名。";
+    }
+
+    /** 当前轮到谁投票 */
+    public String currentVoterName() {
+        if (voteOrder == null || currentVoterIdx >= voteOrder.size()) return null;
+        return voteOrder.get(currentVoterIdx);
+    }
+
+    /** 推进到下一个投票者，返回提示；null=全部投完 */
+    public String nextVoterPrompt() {
+        currentVoterIdx++;
+        if (currentVoterIdx >= voteOrder.size()) return null;
+        return "🗳 " + voteOrder.get(currentVoterIdx) + " 请投票，说出你要放逐的玩家名。";
+    }
+
+    /* 警长选出后→开始讨论
+    public String startDiscuss() {
+        dayPhase = DayPhase.DISCUSS;
+        discussStartMs = System.currentTimeMillis();
+        discussReminded = false;
+        return "💬 自由讨论开始（3分钟），所有玩家可以发言。";
+    }
+
+    public String checkDiscussTimer() {
+        if (dayPhase != DayPhase.DISCUSS) return null;
+        long elapsed = (System.currentTimeMillis() - discussStartMs) / 1000;
+        if (elapsed >= DISCUSS_SEC) {
+            dayPhase = DayPhase.EXILE_VOTE;
+            activeVotes.clear();
+            return "⏰ 讨论时间到！现在开始放逐投票，请每位存活玩家输入你要投的玩家名。";
+        }
+        if (!discussReminded && elapsed >= DISCUSS_REMIND_SEC) {
+            discussReminded = true;
+            return "⏰ 讨论还剩30秒，请尽快发言。";
+        }
+        return null;
+    }
+    */
+
+    /**
+     * 处理投票。target 为投票对象，voter 为投票人。
+     * @return null=已记录等下一个，以❌开头=错误，以📊开头=全部投完的结果
+     */
+    public String handleVote(String voter, String target, GameSession session) {
+        if (!isInVotePhase()) return "❌ 当前不在投票阶段。";
+        // 检查是否轮到该玩家
+        String cur = currentVoterName();
+        if (cur == null) return "❌ 投票已结束。";
+        if (!cur.equals(voter)) return "❌ 还没轮到你，现在是 " + cur + " 在投票。";
+        if (target == null || target.equals(voter)) return "❌ 不能投给自己。";
+        if (!session.playerNames().contains(target)) return "❌ 没有这个玩家。";
+        if (!isPlayerAlive(target)) return "❌ " + target + " 已经死了，请投给存活玩家。";
+        activeVotes.put(voter, target);
+
+        // 推进到下一个
+        String next = nextVoterPrompt();
+        if (next != null) return null; // 还有下一个，返回null让BotApp提示下一人
+        // 全部投完
+        return tally(session);
+    }
+
+    private String tally(GameSession session) {
+        Map<String, Integer> cnt = new LinkedHashMap<>();
+        for (String t : activeVotes.values()) cnt.merge(t, 1, Integer::sum);
+        String winner = null;
+        int max = 0;
+        boolean tie = false;
+        for (var e : cnt.entrySet()) {
+            if (e.getValue() > max) { max = e.getValue(); winner = e.getKey(); tie = false; }
+            else if (e.getValue() == max) { tie = true; }
+        }
+        StringBuilder sb = new StringBuilder("📊 投票结果：\n");
+        for (var e : cnt.entrySet()) sb.append("  ").append(e.getKey()).append(": ").append(e.getValue()).append("票\n");
+
+        if (tie) {
+            sb.append("\n⚡ 票数相同！请再次投票。");
+            activeVotes.clear();
+            return sb.toString();
+        }
+        /* 上警已取消
+        if (dayPhase == DayPhase.SHERIFF_VOTE) {
+            sheriff = winner;
+            sb.append("\n🎖 ").append(winner).append(" 当选警长！（1.5票+最后发言）");
+            return startDiscuss() + "\n\n" + sb.toString();
+        } */
+        {
+            dead.add(winner);
+            sb.append("\n🚫 ").append(winner).append(" 被放逐出局！");
+            if ("猎人".equals(session.playerRole(winner)) && hunterCanShoot) {
+                sb.append("\n🔫 ").append(winner).append(" 是猎人，可以开枪带走一人！（输入玩家名）");
+            }
+            long wolvesAlive = session.playerNames().stream()
+                .filter(n -> !dead.contains(n) && "狼人".equals(session.playerRole(n))).count();
+            long goodsAlive = session.playerNames().stream()
+                .filter(n -> !dead.contains(n) && !"狼人".equals(session.playerRole(n))).count();
+            if (wolvesAlive == 0) { over = true; sb.append("\n\n🎉 所有狼人被放逐，好人阵营获胜！"); }
+            else if (wolvesAlive >= goodsAlive) { over = true; sb.append("\n\n🐺 狼人数量占优，狼人阵营获胜！"); }
+            else {
+                // 进入下一夜
+                night = true; round++;
+                nightPhase = NightPhase.WOLVES;
+                antidoteUsedThisRound = false;
+                wolfKillTarget = null; witchPoisonTarget = null;
+                wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                sb.append("\n\n🌙 天黑请闭眼。\n🐺 狼人请睁眼。");
+            }
+        }
+        if (!over) dayPhase = DayPhase.NONE;
+        else dayPhase = DayPhase.DONE;
+        return sb.toString();
+    }
 
     private static String extractCmd(String line, String prefix) {
         int s = line.indexOf(prefix) + prefix.length();

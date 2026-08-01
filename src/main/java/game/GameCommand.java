@@ -263,97 +263,108 @@ public class GameCommand {
             session.setPlayerBot(nickname, pb != null ? pb.name() : creatorBot.name());
         }
 
-        // ═══ 阶段 1：AI 生成案件背景 + 角色卡 ═══
-        String announce = lobby.engine.start(session);
-        String reply;
-        try {
-            reply = session.prompt(announce);
-            lobby.engine.handle(session, null, reply);
-            System.out.println("[游戏] AI 回复长度: " + (reply != null ? reply.length() : 0) + " 字符");
-        } catch (Exception e) {
-            System.err.println("[游戏] ❌ AI 生成失败: " + e.getMessage());
-            creatorBot.sendText(lobby.creatorId, "❌ 剧本生成失败，请重试：" + e.getMessage());
-            resetState();
-            return false;
-        }
-
-        if (reply == null || reply.isBlank()) {
-            creatorBot.sendText(lobby.creatorId, "❌ AI 未返回剧本，请重新开始游戏。");
-            resetState();
-            return false;
-        }
-
-        // 解析 AI 回复：提取公开部分 + 私信块
-        reply = normalizePrivateTags(reply);
-        StringBuilder pubAnnounce = new StringBuilder();
-        String privWho = null;
-        StringBuilder privMsg = new StringBuilder();
-        java.util.Set<String> receivedCards = new java.util.LinkedHashSet<>();
-        int privCount = 0;
-
-        for (String line : reply.split("\n")) {
-            if (line.startsWith("【私信:") && line.contains("】")) {
-                flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
-                int end = line.indexOf("】");
-                privWho = cleanName(line.substring(4, end));
-                receivedCards.add(privWho);
-                String tail = line.substring(end + 1).strip();
-                if (!tail.isEmpty()) privMsg.append(tail).append("\n");
-                privCount++;
-            } else if (privWho != null) {
-                privMsg.append(line).append("\n");
-            } else {
-                pubAnnounce.append(line).append("\n");
+        // ═══ 阶段 1：角色分配 ═══
+        // 狼人杀：系统直接发角色卡（不经过 AI，杜绝身份泄露）
+        if (lobby.engine instanceof WerewolfEngine we) {
+            we.start(session);
+            for (var e : lobby.boundMap().entrySet()) {
+                String name = e.getKey();
+                String roleCard = we.buildRoleCard(name);
+                sendToPlayer(name, e.getValue(), "📨\n" + roleCard, creatorBot, cluster);
+                System.out.println("[游戏:私信] → " + name + " 角色卡已发送");
             }
-        }
-        flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
-        System.out.println("[游戏] 解析完毕: " + privCount + " 个私信块, 已收到角色卡: " + receivedCards);
+        } else {
+            // 剧本杀等：AI 生成案件背景 + 角色卡
+            String announce = lobby.engine.start(session);
+            String reply;
+            try {
+                reply = session.prompt(announce);
+                lobby.engine.handle(session, null, reply);
+                System.out.println("[游戏] AI 回复长度: " + (reply != null ? reply.length() : 0) + " 字符");
+            } catch (Exception e) {
+                System.err.println("[游戏] ❌ AI 生成失败: " + e.getMessage());
+                creatorBot.sendText(lobby.creatorId, "❌ 剧本生成失败，请重试：" + e.getMessage());
+                resetState();
+                return false;
+            }
 
-        // ═══ 阶段 2：补发遗漏的角色卡 ═══
-        java.util.Set<String> allNames = new java.util.LinkedHashSet<>(java.util.Arrays.asList(names));
-        allNames.removeAll(receivedCards);
-        if (!allNames.isEmpty()) {
-            System.out.println("[游戏] ⚠ 遗漏角色卡: " + allNames + "，补发中...");
-            String pubSoFar = pubAnnounce.toString().strip();
-            if (lobby.engine instanceof game.impl.MurderMysteryEngine mme) {
-                String retryPrompt = mme.roleCardPrompt(
-                    allNames.toArray(new String[0]), pubSoFar);
-                try {
-                    String retryReply = session.prompt(retryPrompt);
-                    lobby.engine.handle(session, null, retryReply);
-                    System.out.println("[游戏] 补发回复长度: " + (retryReply != null ? retryReply.length() : 0));
-                    if (retryReply != null && !retryReply.isBlank()) {
-                        retryReply = normalizePrivateTags(retryReply);
-                        privWho = null;
-                        privMsg.setLength(0);
-                        for (String line : retryReply.split("\n")) {
-                            if (line.startsWith("【私信:") && line.contains("】")) {
-                                flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
-                                int end = line.indexOf("】");
-                                privWho = cleanName(line.substring(4, end));
-                                receivedCards.add(privWho);
-                                String tail = line.substring(end + 1).strip();
-                                if (!tail.isEmpty()) privMsg.append(tail).append("\n");
-                            } else if (privWho != null) {
-                                privMsg.append(line).append("\n");
-                            }
-                            // 补发中的公开部分追加到公告
-                        }
-                        flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
-                    }
-                } catch (Exception e) {
-                    System.err.println("[游戏] ⚠ 补发失败: " + e.getMessage());
+            if (reply == null || reply.isBlank()) {
+                creatorBot.sendText(lobby.creatorId, "❌ AI 未返回剧本，请重新开始游戏。");
+                resetState();
+                return false;
+            }
+
+            // 解析 AI 回复：提取公开部分 + 私信块
+            reply = normalizePrivateTags(reply);
+            StringBuilder pubAnnounce = new StringBuilder();
+            String privWho = null;
+            StringBuilder privMsg = new StringBuilder();
+            java.util.Set<String> receivedCards = new java.util.LinkedHashSet<>();
+            int privCount = 0;
+
+            for (String line : reply.split("\n")) {
+                if (line.startsWith("【私信:") && line.contains("】")) {
+                    flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
+                    int end = line.indexOf("】");
+                    privWho = cleanName(line.substring(4, end));
+                    receivedCards.add(privWho);
+                    String tail = line.substring(end + 1).strip();
+                    if (!tail.isEmpty()) privMsg.append(tail).append("\n");
+                    privCount++;
+                } else if (privWho != null) {
+                    privMsg.append(line).append("\n");
+                } else {
+                    pubAnnounce.append(line).append("\n");
                 }
             }
-        }
+            flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
+            System.out.println("[游戏] 解析完毕: " + privCount + " 个私信块, 已收到角色卡: " + receivedCards);
 
-        // ═══ 广播公开公告（案件背景）给所有玩家 ═══
-        String pubStr = pubAnnounce.toString().strip();
-        if (!pubStr.isEmpty()) {
-            for (var e : lobby.boundMap().entrySet()) {
-                sendToPlayer(e.getKey(), e.getValue(), pubStr, creatorBot, cluster);
+            // ═══ 阶段 2：补发遗漏的角色卡 ═══
+            java.util.Set<String> allNames = new java.util.LinkedHashSet<>(java.util.Arrays.asList(names));
+            allNames.removeAll(receivedCards);
+            if (!allNames.isEmpty()) {
+                System.out.println("[游戏] ⚠ 遗漏角色卡: " + allNames + "，补发中...");
+                String pubSoFar = pubAnnounce.toString().strip();
+                if (lobby.engine instanceof game.impl.MurderMysteryEngine mme) {
+                    String retryPrompt = mme.roleCardPrompt(
+                        allNames.toArray(new String[0]), pubSoFar);
+                    try {
+                        String retryReply = session.prompt(retryPrompt);
+                        lobby.engine.handle(session, null, retryReply);
+                        System.out.println("[游戏] 补发回复长度: " + (retryReply != null ? retryReply.length() : 0));
+                        if (retryReply != null && !retryReply.isBlank()) {
+                            retryReply = normalizePrivateTags(retryReply);
+                            privWho = null;
+                            privMsg.setLength(0);
+                            for (String line : retryReply.split("\n")) {
+                                if (line.startsWith("【私信:") && line.contains("】")) {
+                                    flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
+                                    int end = line.indexOf("】");
+                                    privWho = cleanName(line.substring(4, end));
+                                    receivedCards.add(privWho);
+                                    String tail = line.substring(end + 1).strip();
+                                    if (!tail.isEmpty()) privMsg.append(tail).append("\n");
+                                } else if (privWho != null) {
+                                    privMsg.append(line).append("\n");
+                                }
+                            }
+                            flushPrivate(privWho, privMsg, creatorBot, session, cluster, false);
+                        }
+                    } catch (Exception e) {
+                        System.err.println("[游戏] ⚠ 补发失败: " + e.getMessage());
+                    }
+                }
             }
-            System.out.println("[游戏:广播] " + pubStr.substring(0, Math.min(80, pubStr.length())) + "...");
+
+            // ═══ 广播公开公告（案件背景）给所有玩家 ═══
+            String pubStr = pubAnnounce.toString().strip();
+            if (!pubStr.isEmpty()) {
+                for (var e : lobby.boundMap().entrySet()) {
+                    sendToPlayer(e.getKey(), e.getValue(), pubStr, creatorBot, cluster);
+                }
+                System.out.println("[游戏:广播] " + pubStr.substring(0, Math.min(80, pubStr.length())) + "...");
+            }
         }
 
         // ═══ 通知所有玩家游戏开始 ═══
@@ -364,46 +375,29 @@ public class GameCommand {
         for (var e : lobby.boundMap().entrySet())
             sendToPlayer(e.getKey(), e.getValue(), startMsg, creatorBot, cluster);
 
-        // ═══ 狼人杀：全员天黑 + 狼人请睁眼 + 启动第一夜 ======
+        // ═══ 狼人杀：天黑 + 狼人请睁眼 + 启动第一夜 ======
         if (lobby.engine instanceof WerewolfEngine we) {
-            // 天黑 → 所有人；狼人睁眼 → 只发狼人；其他角色 → 闭眼等待
+            // 第1步：天黑请闭眼 → 全员广播
+            for (var e : lobby.boundMap().entrySet()) {
+                sendToPlayer(e.getKey(), e.getValue(), "🌙 天黑请闭眼。", creatorBot, cluster);
+            }
+            // 第2步：狼人请睁眼 → 全员广播
+            for (var e : lobby.boundMap().entrySet()) {
+                sendToPlayer(e.getKey(), e.getValue(), "🐺 狼人请睁眼。", creatorBot, cluster);
+            }
+            // 第3步：狼人私聊讨论击杀目标 → 只发狼人
             for (var e : lobby.boundMap().entrySet()) {
                 String playerName = e.getKey();
-                String role = session.playerRole(playerName);
-                sendToPlayer(playerName, e.getValue(), "🌙 天黑请闭眼...", creatorBot, cluster);
-                if ("狼人".equals(role)) {
+                if ("狼人".equals(session.playerRole(playerName))) {
                     sendToPlayer(playerName, e.getValue(),
-                        "🐺 你是狼人，请睁眼。你的同伴也在线，请讨论今晚要击杀的目标。", creatorBot, cluster);
-                } else {
-                    sendToPlayer(playerName, e.getValue(),
-                        "🌙 " + (role != null ? "你是" + role + "，" : "") + "请闭眼等待天亮...", creatorBot, cluster);
+                        "📨 请和同伴讨论今晚要击杀的目标，达成一致后告诉主持人。", creatorBot, cluster);
                 }
             }
-            // DeepSeek 启动夜晚流程
-            String nightReply = session.prompt(we.nightTrigger());
-            if (nightReply != null) {
-                we.handle(session, null, nightReply);
-                nightReply = normalizePrivateTags(nightReply);
-                String nw = null;
-                StringBuilder nm = new StringBuilder();
-                for (String line : nightReply.split("\n")) {
-                    if (line.startsWith("【私信:") && line.contains("】")) {
-                        flushPrivate(nw, nm, creatorBot, session, cluster, false);
-                        int end = line.indexOf("】");
-                        nw = cleanName(line.substring(4, end));
-                        String tail = line.substring(end + 1).strip();
-                        if (!tail.isEmpty()) nm.append(tail).append("\n");
-                    } else if (nw != null) {
-                        nm.append(line).append("\n");
-                    }
-                }
-                flushPrivate(nw, nm, creatorBot, session, cluster, false);
-            }
+            // 狼人阶段由系统驱动共识，无需AI
         }
 
         resetState();
-        System.out.println("[游戏] " + lobby.engine.name() + " 开始，" + names.length + "人，"
-            + receivedCards.size() + "人已收到角色卡");
+        System.out.println("[游戏] " + lobby.engine.name() + " 开始，" + names.length + "人");
         return true;
     }
 
@@ -419,6 +413,52 @@ public class GameCommand {
         return text
             .replaceAll("(?<![【])私信[：:]\\s*([^\\s，。；\\n【]+)", "\n【私信:$1】")
             .strip();
+    }
+
+    /** 夜晚阶段推进：广播公告 + 系统直发私信（不经过AI） */
+    private static void advanceNightPhase(WerewolfEngine we, GameSession session,
+                                           String phaseAnnounce, ILinkBot fallbackBot,
+                                           BotCluster cluster) {
+        if (phaseAnnounce != null && !phaseAnnounce.isBlank()) {
+            for (String name : session.playerNames()) {
+                String uid = session.getUserId(name);
+                if (uid == null) continue;
+                ILinkBot tb = cluster.getBot(name) != null ? cluster.getBot(name) : fallbackBot;
+                if (tb != null) tb.sendText(uid, phaseAnnounce);
+            }
+        }
+        // 女巫阶段→系统私信女巫
+        if (we.getNightPhase() == WerewolfEngine.NightPhase.WITCH) {
+            String msg = we.witchInfoMessage();
+            for (String name : session.playerNames()) {
+                if (!"女巫".equals(session.playerRole(name)) || !we.isPlayerAlive(name)) continue;
+                String uid = session.getUserId(name);
+                if (uid == null) continue;
+                ILinkBot tb = cluster.getBot(name) != null ? cluster.getBot(name) : fallbackBot;
+                if (tb != null) tb.sendText(uid, "📨 " + msg);
+            }
+        }
+        // 预言家阶段→系统私信预言家
+        if (we.getNightPhase() == WerewolfEngine.NightPhase.SEER) {
+            for (String name : session.playerNames()) {
+                if (!"预言家".equals(session.playerRole(name)) || !we.isPlayerAlive(name)) continue;
+                String uid = session.getUserId(name);
+                if (uid == null) continue;
+                ILinkBot tb = cluster.getBot(name) != null ? cluster.getBot(name) : fallbackBot;
+                if (tb != null) tb.sendText(uid, "📨 请输入你要查验的玩家名。");
+            }
+        }
+        // 夜晚结束 → 启动白天流程
+        if (!we.isNight() && we.getNightPhase() == WerewolfEngine.NightPhase.DONE
+            && we.getDayPhase() == WerewolfEngine.DayPhase.NONE) {
+            String dayAnnounce = we.beginDaytime();
+            for (String name : session.playerNames()) {
+                String uid = session.getUserId(name);
+                if (uid == null) continue;
+                ILinkBot tb = cluster.getBot(name) != null ? cluster.getBot(name) : fallbackBot;
+                if (tb != null) tb.sendText(uid, dayAnnounce);
+            }
+        }
     }
 
     private static void resetState() {

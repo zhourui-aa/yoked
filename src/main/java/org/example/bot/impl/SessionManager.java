@@ -162,6 +162,12 @@ public class SessionManager {
         s.persona = persona;
     }
 
+    /** 查看当前人设 */
+    public synchronized String getPersona(String userId) {
+        Session s = getOrCreate(userId);
+        return "🎭 当前人设：「" + s.persona + "」";
+    }
+
     /** 切换语音模式 */
     public synchronized boolean toggleVoiceMode(String userId) {
         boolean current = voiceMode.getOrDefault(userId, false);
