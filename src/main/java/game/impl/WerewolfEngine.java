@@ -217,15 +217,12 @@ public class WerewolfEngine implements GameEngine {
             long wolfCount = session.playerNames().stream()
                 .filter(n -> "狼人".equals(session.playerRole(n)) && isPlayerAlive(n)).count();
             if (wolfAgreed.size() >= wolfCount) {
-                // 共识达成
-                String target = wolfProposal;
-                if (!dead.contains(target)) {
-                    dead.add(target);
-                    if (wolfKillTarget == null) wolfKillTarget = target;
-                }
+                // 共识达成——只设目标，天亮才进死亡池（保证女巫/预言家回合还能发言）
+                String killed = wolfProposal;
+                wolfKillTarget = killed;
                 wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
                 nightPhase = NightPhase.WITCH;
-                return "✅ 狼人一致同意击杀 " + target + "。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+                return "✅ 狼人一致同意击杀 " + killed + "。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
             }
             return "✅ 你已同意击杀 " + wolfProposal + "。（" + wolfAgreed.size() + "/" + wolfCount + "）";
         }
@@ -241,7 +238,7 @@ public class WerewolfEngine implements GameEngine {
     /** 告知女巫死者信息（系统直发） */
     public String witchInfoMessage() {
         String target = wolfKillTarget;
-        if (target != null && dead.contains(target)) {
+        if (target != null) {
             return "🔮 今晚死者是 " + target + "。\n输入「救」使用解药，输入「毒 玩家名」使用毒药，输入「不用」跳过。";
         }
         return "🔮 今晚是平安夜，无人死亡。\n输入「毒 玩家名」使用毒药，输入「不用」跳过。";
@@ -256,7 +253,7 @@ public class WerewolfEngine implements GameEngine {
         // 解药
         if (cmd.equals("救")) {
             if (witchAntidoteUsed) return "❌ 解药已用过。";
-            if (wolfKillTarget == null || !dead.contains(wolfKillTarget)) return "❌ 今晚没有死者，无需使用解药。";
+            if (wolfKillTarget == null) return "❌ 今晚没有死者，无需使用解药。";
             witchAntidoteUsed = true;
             antidoteUsedThisRound = true;
             System.out.println("[狼人杀] 女巫使用解药，救活 " + wolfKillTarget);
@@ -301,13 +298,15 @@ public class WerewolfEngine implements GameEngine {
         // 推进到天亮
         nightPhase = NightPhase.DONE;
         night = false;
-        // 死亡结算（先记下目标再结算）
+        // 死亡结算（天亮统一进死亡池）
         String wolfTarget = wolfKillTarget;
         String poisonTarget = witchPoisonTarget;
         if (antidoteUsedThisRound && wolfTarget != null) {
-            dead.remove(wolfTarget);
-            wolfTarget = null; // 被救活
+            wolfTarget = null; // 被救活，不进死亡池
             System.out.println("[狼人杀] 解药救活");
+        }
+        if (wolfTarget != null) {
+            dead.add(wolfTarget); // 狼刀生效
         }
         if (poisonTarget != null && !dead.contains(poisonTarget)) {
             dead.add(poisonTarget);
