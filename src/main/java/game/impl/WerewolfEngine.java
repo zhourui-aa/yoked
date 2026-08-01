@@ -508,8 +508,15 @@ public class WerewolfEngine implements GameEngine {
         for (var e : cnt.entrySet()) sb.append("  ").append(e.getKey()).append(": ").append(e.getValue()).append("票\n");
 
         if (tie) {
-            sb.append("\n⚡ 票数相同！请再次投票。");
-            activeVotes.clear();
+            // 平局不放逐，直接进下一夜
+            sb.append("\n⚡ 票数相同，无人被放逐。");
+            night = true; round++;
+            nightPhase = NightPhase.WOLVES;
+            antidoteUsedThisRound = false;
+            wolfKillTarget = null; witchPoisonTarget = null;
+            wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+            sb.append("\n\n🌙 天黑请闭眼。\n🐺 狼人请睁眼。");
+            dayPhase = DayPhase.NONE;
             return sb.toString();
         }
         /* 上警已取消
