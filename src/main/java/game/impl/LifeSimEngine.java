@@ -5,7 +5,6 @@ import game.GameEngine;
 import game.GameRegistry;
 import com.google.gson.Gson;
 import java.io.*;
-import java.nio.file.*;
 import java.util.*;
 import java.util.stream.*;
 
@@ -55,7 +54,8 @@ public class LifeSimEngine implements GameEngine {
     @Override public int maxPlayers() { return 1; }
 
     @Override public String systemPrompt() {
-        return "你是一个安静的观察者，透过窗户看着" + name + "的人生。\n用具体的画面和细节叙述——光线、声音、表情。120-160字。";
+        String n = name != null ? name : "这个孩子";
+        return "你是一个安静的观察者，透过窗户看着" + n + "的人生。\n用具体的画面和细节叙述——光线、声音、表情。120-160字。";
     }
 
     // ==================== 初始化 ====================
@@ -83,8 +83,9 @@ public class LifeSimEngine implements GameEngine {
 
     private void loadTalents() {
         if (!allTalents.isEmpty()) return;
-        try {
-            String json = Files.readString(Path.of("src/main/java/game/impl/talents.json"));
+        try (var in = getClass().getResourceAsStream("talents.json")) {
+            if (in == null) { System.err.println("[人生] ⚠ talents.json 未找到"); return; }
+            String json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             Talent[] arr = new Gson().fromJson(json, Talent[].class);
             allTalents.addAll(Arrays.asList(arr));
         } catch (IOException e) { System.err.println("[人生] 天赋加载失败: " + e.getMessage()); }
@@ -92,8 +93,9 @@ public class LifeSimEngine implements GameEngine {
 
     private void loadEvents() {
         if (!allEvents.isEmpty()) return;
-        try {
-            String json = Files.readString(Path.of("src/main/java/game/impl/events.json"));
+        try (var in = getClass().getResourceAsStream("events.json")) {
+            if (in == null) { System.err.println("[人生] ⚠ events.json 未找到"); return; }
+            String json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
             EventWrapper w = new Gson().fromJson(json, EventWrapper.class);
             allEvents.addAll(w.events);
             for (Stage s : Stage.values()) eventMap.put(s, new ArrayList<>());
@@ -106,6 +108,14 @@ public class LifeSimEngine implements GameEngine {
 
     private void drawTalents() {
         drawnTalents.clear();
+        if (allTalents.isEmpty()) {
+            // JSON 加载失败时的硬兜底——避免死循环
+            System.err.println("[人生] ⚠ 天赋池为空，使用内置兜底天赋");
+            allTalents.add(new Talent() {{ id="fallback1"; name="普通人生"; rarity="white"; desc="平凡起点"; }});
+            allTalents.add(new Talent() {{ id="fallback2"; name="身体健康"; rarity="blue"; desc="体质+10"; physique=10; }});
+            allTalents.add(new Talent() {{ id="fallback3"; name="头脑灵活"; rarity="blue"; desc="智力+10"; intel=10; }});
+            allTalents.add(new Talent() {{ id="fallback4"; name="天生乐观"; rarity="white"; desc="心情+10"; mood=10; }});
+        }
         List<Talent> pool = new ArrayList<>(allTalents);
         Collections.shuffle(pool, rng);
         // 10抽：至少1金2紫4蓝
@@ -162,7 +172,9 @@ public class LifeSimEngine implements GameEngine {
 
         // 取名
         if (phase == Phase.NAMING) {
-            name = text.replaceAll("[，。！？\\s]", "");
+            // 清洗：去换行、控制字符、中英文标点、方括号，只保留中英文数字
+            name = text.replaceAll("[\\p{Cntrl}\\[\\]【】{}()（）\"'`，。！？：；、\\s]", "");
+            if (name.isEmpty()) name = "无名";
             if (name.length() > 8) name = name.substring(0, 8);
             named = true; phase = Phase.PLAYING;
             return "✅ **" + name + "**\n\n" + nextEvent();
@@ -205,6 +217,14 @@ public class LifeSimEngine implements GameEngine {
             triggeredEvents.clear();
             available = pool.stream().filter(e -> "random".equals(e.type)).collect(Collectors.toList());
         }
+        // 硬兜底：如果该阶段实在没有事件，直接推进年龄
+        if (available.isEmpty()) {
+            age += 1 + rng.nextInt(2);
+            if (health <= 0) { over = true; return deathEnding(); }
+            if (age >= maxAge) { over = true; return naturalEnding(); }
+            return "⏳ " + name + " " + age + "岁，" + getStageLabel() + "。日子平静地流淌…\n\n"
+                + statCompact() + "\n\n💡 /state /help /restart";
+        }
 
         currentEvent = available.get(rng.nextInt(available.size()));
         triggeredEvents.add(currentEvent.title);
@@ -219,9 +239,10 @@ public class LifeSimEngine implements GameEngine {
         EventOpt opt = currentEvent.opts.get(choiceIdx - 1);
         applyEffects(opt.eff);
 
-        // 低心情检测
-        if (mood < 20) lowMoodTurns++; else lowMoodTurns = 0;
-        if (lowMoodTurns >= 3) {
+        // 低心情检测（天赋 moodMin 防止心情过低）
+        int minMood = getMoodMin();
+        if (mood < Math.max(20, minMood)) lowMoodTurns++; else lowMoodTurns = 0;
+        if (lowMoodTurns >= 3 && mood < 20) {
             mood -= 10; health -= 10;
             lowMoodTurns = 0;
         }
@@ -273,9 +294,9 @@ public class LifeSimEngine implements GameEngine {
                 case "luck" -> luck = c(luck+actual);
                 case "morality" -> morality = c(morality+actual);
                 case "parentsRelation" -> parentsRel = c(parentsRel+actual);
-                case "partnerRelation" -> partnerRel += actual;
-                case "childrenRelation" -> childrenRel += actual;
-                case "bestFriendRelation" -> bestFriendRel += actual;
+                case "partnerRelation" -> partnerRel = c(partnerRel+actual);
+                case "childrenRelation" -> childrenRel = c(childrenRel+actual);
+                case "bestFriendRelation" -> bestFriendRel = c(bestFriendRel+actual);
                 case "stress" -> mood = c(mood - actual); // backward compat
             }
         }
@@ -289,6 +310,7 @@ public class LifeSimEngine implements GameEngine {
                 case "physique" -> { if (t.physiqueRate > 0) rate *= t.physiqueRate; }
                 case "charm" -> { if (t.charmRate > 0) rate *= t.charmRate; }
                 case "wealth" -> { if (t.wealthRate > 0) rate *= t.wealthRate; }
+                case "mood" -> { if (t.moodRate > 0) rate *= t.moodRate; }
                 case "health" -> { if (t.healthRate > 0) rate *= t.healthRate; }
             }
         }
@@ -436,10 +458,26 @@ public class LifeSimEngine implements GameEngine {
 
     private int[] parseNumbers(String text) {
         return Arrays.stream(text.replaceAll("[^0-9]+", " ").trim().split("\\s+"))
-            .filter(s -> !s.isEmpty()).mapToInt(Integer::parseInt).distinct().toArray();
+            .filter(s -> !s.isEmpty() && s.length() <= 9) // 防溢出，最多9位数
+            .mapToInt(s -> { try { return Integer.parseInt(s); } catch (NumberFormatException e) { return -1; } })
+            .filter(n -> n > 0).distinct().toArray();
     }
 
-    private int c(int v) { return Math.max(0, Math.min(100, v)); }
+    private int c(int v) { return Math.max(0, Math.min(getHealthMax(), v)); }
+
+    /** 天赋加成后的健康上限（默认100，铁打的身体+10→110） */
+    private int getHealthMax() {
+        int max = 100;
+        for (Talent t : activeTalents) { if (t.healthMax > 0) max = Math.max(max, t.healthMax); }
+        return max;
+    }
+
+    /** 天赋加成后的心情下限（默认0，乐观性格→15） */
+    private int getMoodMin() {
+        int min = 0;
+        for (Talent t : activeTalents) { if (t.moodMin > 0) min = Math.max(min, t.moodMin); }
+        return min;
+    }
 
     @Override public boolean isOver() { return over; }
     @Override public String stateContext() { return name + " " + age + "岁 " + getStageLabel(); }

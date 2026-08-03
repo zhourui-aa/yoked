@@ -113,13 +113,32 @@ public class BotCluster {
     }
 
     /**
-     * 向指定用户发消息：只用 userBotMap 记录的 bot（避免跨 bot SDK 冲突）。
-     * 没映射就遍历所有 bot 找一个能发的。
+     * 向指定用户发消息：优先用 userBotMap 记录的 bot，其次当前线程 bot，最后取第一个在线 bot。
+     * 禁止无差别群发——每个 bot 的 context_token 是独立的，乱发会导致 SDK 报错。
      */
     public void sendToUser(String userId, String text) {
         ILinkBot bot = userBotMap.get(userId);
-        if (bot != null) { bot.sendText(userId, text); return; }
-        for (ILinkBot b : bots) b.sendText(userId, text);
+        if (bot == null) {
+            bot = CURRENT_BOT.get();
+            if (bot != null) userBotMap.put(userId, bot); // 记住映射，下次直接用
+        }
+        if (bot == null && !bots.isEmpty()) bot = bots.get(0);
+        if (bot != null) bot.sendText(userId, text);
+        else System.err.println("[BotCluster] ❌ 无可用 bot 发送消息给 " + userId);
+    }
+
+    /** 按名称移除并关闭一个 bot */
+    public void removeBot(String name) {
+        for (ILinkBot b : bots) {
+            if (b.name().equals(name)) {
+                bots.remove(b);
+                b.close();
+                // 清理 userBotMap 中该 bot 的映射
+                userBotMap.entrySet().removeIf(e -> e.getValue() == b);
+                System.out.println("[BotCluster] " + name + " 已移除");
+                return;
+            }
+        }
     }
 
     /** 关闭所有 bot */

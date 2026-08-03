@@ -33,6 +33,12 @@ public class GameCommand {
                 return true;
             }
             if (step != null) {
+                // 清理大厅和 pending bots
+                if (GameRegistry.hasLobby()) {
+                    for (String nick : GameRegistry.lobby().pendingNames())
+                        cluster.removeBot(nick);
+                }
+                GameRegistry.dismissLobby();
                 resetState();
                 bot.sendText(userId, "👋 已退出桌游大厅。");
                 return true;

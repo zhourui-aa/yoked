@@ -117,6 +117,8 @@ public class GameRegistry {
         public Set<String> nicknames() { return new LinkedHashSet<>(bound.keySet()); }
 
         public boolean pendingContains(String name) { return pending.contains(name); }
+        /** 所有待扫码的昵称（用于清理时关闭对应 bot） */
+        public Set<String> pendingNames() { return new LinkedHashSet<>(pending); }
         public String[] toPlayerNames() { return bound.keySet().toArray(new String[0]); }
         public Map<String, String> boundMap() { return Collections.unmodifiableMap(bound); }
 

@@ -44,9 +44,6 @@ import game.GameEngine;
 import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
-import game.impl.MurderMysteryEngine;
-import game.impl.LifeSimEngine;
-import game.impl.UndercoverEngine;
 import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
@@ -107,13 +104,12 @@ public class BotApp {
             return t;
         });
 
-    /** 狼人杀白天阶段定时器 */
-    private static final java.util.concurrent.ScheduledExecutorService DAY_TIMER =
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "werewolf-day-timer");
-            t.setDaemon(true);
-            return t;
-        });
+    /** 共享 HTTP 客户端 — 连接复用，避免每次请求新建 */
+    private static final java.net.http.HttpClient SHARED_HTTP =
+        java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofSeconds(10))
+            .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+            .build();
 
     /** 日期时间服务 — 始终可用（无 Key 时返回提示） */
     private static final DateTimeService dateTime = new DateTimeServiceImpl();
@@ -126,6 +122,8 @@ public class BotApp {
     private static final RAGPipeline ragPipeline = new RAGPipeline(5);
     /** Bot 集群 — 支持多微信号同时在线，运行时可通过命令动态新建 */
     private static BotCluster cluster;
+    /** 服务上下文 — 统一管理所有服务，消除长参数列表 */
+    private static BotContext ctx;
 
     /** 要创建的 Bot 数量（可通过 -Dbots=3 覆盖） */
     private static final int BOT_COUNT = Integer.getInteger("bots", 1);
@@ -222,35 +220,18 @@ public class BotApp {
         GarbageService garbage = new GarbageServiceImpl();
         System.out.println("[Bot] 🗑 垃圾分类服务已就绪");
 
-        // 注册桌游引擎
-        GameRegistry.register(new WerewolfEngine());
-        GameRegistry.register(new MurderMysteryEngine());
-        GameRegistry.register(new UndercoverEngine());
-        GameRegistry.register(new LifeSimEngine());
-        System.out.println("[Bot] 🎮 桌游引擎已注册");
+        // 桌游引擎由 GameRegistry static 块自动注册
+        System.out.println("[Bot] 🎮 桌游引擎已就绪");
 
         // ---- 向工具中心注册所有 FC 工具 ----
         registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db, scheduler);
         System.out.println(toolCenter.summary());
         System.out.println(skillManager.summary());
 
-        // ---- 捕获为 final 变量供 lambda 使用 ----
-        final ImageGenService fImageGen = imageGen;
-        final VisionService fVision = vision;
-        final SpeechService fTts = tts;
-        final AiService fAi = ai;
-        final WeatherBotService fWeather = weather;
-        final CalculatorService fCalc = calc;
-        final RandomService fRandom = random;
-        final ExpressService fExpress = express;
-        final NewsService fNews = news;
-        final FootballService fFootball = football;
-        final DietService fDiet = diet;
-        final FinanceService fFinance = finance;
-        final WebReaderService fWebReader = webReader;
-        final WebSearchService fSearch = search;
-        final IdiomService fIdiom = idiom;
-        final GarbageService fGarbage = garbage;
+        // 构建服务上下文（消除长参数列表）
+        ctx = new BotContext(ai, tts, calc, random, express, football, diet, weather, vision,
+            imageGen, news, finance, webReader, search, idiom, garbage, db, scheduler,
+            toolCenter, skillManager, ragPipeline);
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
         cluster.setHandler(msg -> {
@@ -263,11 +244,13 @@ public class BotApp {
                     String notify = GameCommand.onBotBound(bot.name());
                     System.out.println("[大厅] " + bot.name() + " 已扫码");
                     if (notify != null) {
-                        bot.sendText(GameRegistry.lobby().creatorId, notify);
+                        // 用创建者自己的 bot 发通知（新 bot 没有创建者的 context_token）
+                        ILinkBot cb = cluster.getBot(GameRegistry.lobby().creatorBotName);
+                        (cb != null ? cb : bot).sendText(GameRegistry.lobby().creatorId, notify);
                     }
                     // 人齐自动开始
                     if (GameRegistry.hasLobby() && GameRegistry.lobby().allBound()) {
-                        GameCommand.autoStart(bot, fAi, GameRegistry.lobby(), cluster);
+                        GameCommand.autoStart(bot, ctx.ai, GameRegistry.lobby(), cluster);
                     }
                 }
             }
@@ -283,24 +266,23 @@ public class BotApp {
             if (msg.isVoice()) {
                 System.out.println("[收到] " + userId + " : [语音] "
                     + (msg.voiceText() != null ? msg.voiceText() : ""));
-                handleVoice(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader, msg);
+                handleVoice(bot, ctx, msg);
                 return;
             }
             if (msg.isImage()) {
                 System.out.println("[收到] " + userId + " : [图片] " + msg.text());
-                handleImage(bot, fAi, fVision, msg);
+                handleImage(bot, ctx.ai, ctx.vision, msg);
                 return;
             }
             if (msg.isFile()) {
                 System.out.println("[收到] " + userId + " : [文件] " + msg.fileName());
-                handleFile(bot, fAi, userId, msg);
+                handleFile(bot, ctx.ai, userId, msg);
                 return;
             }
             // 文字消息
             String text = msg.text().strip();
             System.out.println("[收到] " + userId + " : " + text);
-            processTextMessage(bot, fAi, fTts, fCalc, fRandom, fExpress, fFootball, fDiet, fWeather, fVision, fImageGen, fNews, fFinance, fWebReader,
-                               userId, text, false);
+            processTextMessage(bot, ctx, userId, text, false);
         });
 
         System.out.println("\n[Bot] 🟢 等待扫码登录...（按 Ctrl+C 退出）\n");
@@ -331,34 +313,27 @@ public class BotApp {
      *
      * @param forceVoice {@code true} 表示这条消息来自语音输入，回复必须带语音
      */
-    private static void processTextMessage(ILinkBot bot, AiService ai, SpeechService tts,
-                                           CalculatorService calc,
-                                           RandomService random, ExpressService express,
-                                           FootballService football, DietService diet,
-                                           WeatherBotService weather, VisionService vision,
-                                           ImageGenService imageGen, NewsService news,
-                                           FinanceService finance,
-                                           WebReaderService webReader,
+    private static void processTextMessage(ILinkBot bot, BotContext ctx,
                                            String userId, String text, boolean forceVoice) {
         // ⓪ 游戏模式 — 消息路由到游戏会话
         if (handleGameMessage(bot, userId, text)) return;
 
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
-        if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
+        if (tryHandleLocalCommand(bot, ctx.ai, ctx.tts, userId, text)) return;
 
         // ② Skill 预处理 — 命中则短路，跳过 AI 调用
         if (skillManager.preProcess(userId, text, bot)) return;
 
         // ③ 语音意图 — 关键词命中即生效（不再额外调 AI 确认）
         boolean wantsVoice = forceVoice
-            || (tts != null && containsKeyword(text, VOICE_REPLY_KEYWORDS));
+            || (ctx.tts != null && containsKeyword(text, VOICE_REPLY_KEYWORDS));
         if (wantsVoice) System.out.println("[Bot] 🔊 语音回复");
 
         // ③ 构建工具列表 — 根据当前状态动态决定哪些工具可用
         java.util.List<FunctionDefinition> tools = new java.util.ArrayList<>();
         java.util.Map<String, java.util.function.Function<JsonObject, String>> executors
             = new java.util.LinkedHashMap<>();
-        buildTools(tools, executors, bot, ai, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, userId);
+        buildTools(tools, executors, bot, ctx, userId);
 
         // ④ RAG 检索 + Skill 上下文增强 — 在调 AI 之前注入
         String ragContext = ragPipeline.augment(userId, text);
@@ -370,25 +345,25 @@ public class BotApp {
 
         // ⑤ 统一 Function Calling — 一次 API 调用，AI 自主决定用哪个工具
         if (!tools.isEmpty()) {
-            String fcResult = ai.chatWithTools(userId, finalText, tools, executors);
+            String fcResult = ctx.ai.chatWithTools(userId, finalText, tools, executors);
             if (fcResult != null) {
                 fcResult = skillManager.postProcess(userId, fcResult);
                 System.out.println("[回复] " + fcResult);
                 bot.sendTextWithTyping(userId, fcResult, 500L);
-                if (wantsVoice || isVoiceMode(ai, userId))
-                    sendAsVoice(bot, tts, userId, fcResult);
+                if (wantsVoice || isVoiceMode(ctx.ai, userId))
+                    sendAsVoice(bot, ctx.tts, userId, fcResult);
                 return;
             }
         }
 
         // ⑥ 降级：AI 自由对话
         System.out.println("[Bot] → AI 对话");
-        String reply = ai.chat(userId, finalText);
+        String reply = ctx.ai.chat(userId, finalText);
         reply = skillManager.postProcess(userId, reply);
         System.out.println("[回复] " + reply);
         bot.sendTextWithTyping(userId, reply, 500L);
-        if (wantsVoice || isVoiceMode(ai, userId))
-            sendAsVoice(bot, tts, userId, reply);
+        if (wantsVoice || isVoiceMode(ctx.ai, userId))
+            sendAsVoice(bot, ctx.tts, userId, reply);
     }
 
     // ---- 本地命令（精确/前缀匹配，不消耗 AI 调用）----
@@ -478,41 +453,8 @@ public class BotApp {
     private static void buildTools(
             java.util.List<FunctionDefinition> tools,
             java.util.Map<String, java.util.function.Function<JsonObject, String>> executors,
-            ILinkBot bot, AiService ai,
-            CalculatorService calc,
-            RandomService random, ExpressService express,
-            FootballService football, DietService diet,
-            WeatherBotService weather, VisionService vision,
-            ImageGenService imageGen, NewsService news,
-            FinanceService finance, WebReaderService webReader, String userId) {
-        toolCenter.buildTools(tools, executors, userId);
-
-        // --- 音乐搜索试听（直接注册，不走 ToolCenter 以保持对 bot 的异步访问）---
-        tools.add(functionDef("play_music",
-            "搜索并播放歌曲试听。当用户说「我想听」「放一首」「来一首」「唱一首」「播放」等时调用。",
-            Map.of(
-                "song", Map.of("type", "string", "description", "歌曲名称，例如：七里香、孤勇者"),
-                "artist", Map.of("type", "string", "description", "歌手名称（可选），例如：周杰伦")
-            )));
-        executors.put("play_music", args -> {
-            String song = args.has("song") ? args.get("song").getAsString() : "";
-            String artist = args.has("artist") ? args.get("artist").getAsString() : "";
-            String result = music.search(song, artist);
-            // 提取音频 URL 并异步下载发送
-            int urlIdx = result.indexOf("音频URL:");
-            if (urlIdx >= 0) {
-                String audioUrl = result.substring(urlIdx + 7).lines().findFirst().orElse("").trim();
-                if (!audioUrl.isBlank()) {
-                    IMAGE_EXECUTOR.submit(() -> {
-                        try {
-                            byte[] data = music.downloadSong(audioUrl);
-                            bot.sendFile(userId, data, (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
-                        } catch (Exception ignored) {}
-                    });
-                }
-            }
-            return result;
-        });
+            ILinkBot bot, BotContext ctx, String userId) {
+        ctx.toolCenter.buildTools(tools, executors, userId);
     }
 
     // ============================================================
@@ -1074,6 +1016,36 @@ public class BotApp {
                 if (taskId.isBlank()) return "请提供要取消的任务ID（可在「查看定时任务」中找到）。";
                 return scheduler.cancel(taskId);
             }));
+
+        // ---- 音乐搜索试听 ----
+        toolCenter.register(new ToolDefinition("play_music",
+            "搜索并播放歌曲试听。当用户说「我想听」「放一首」「来一首」「唱一首」「播放」等时调用。",
+            Map.of(
+                "song", Map.of("type", "string", "description", "歌曲名称，例如：七里香、孤勇者"),
+                "artist", Map.of("type", "string", "description", "歌手名称（可选），例如：周杰伦")
+            ),
+            args -> {
+                String song = args.has("song") ? args.get("song").getAsString() : "";
+                String artist = args.has("artist") ? args.get("artist").getAsString() : "";
+                String result = music.search(song, artist);
+                int urlIdx = result.indexOf("音频URL:");
+                if (urlIdx >= 0) {
+                    String audioUrl = result.substring(urlIdx + 7).lines().findFirst().orElse("").trim();
+                    if (!audioUrl.isBlank()) {
+                        // 在进入异步线程前捕获当前线程的值（handler 线程中这些都有值）
+                        ILinkBot currentBot = BotCluster.current();
+                        String uid = ToolCenter.currentUserId();
+                        IMAGE_EXECUTOR.submit(() -> {
+                            try {
+                                byte[] data = music.downloadSong(audioUrl);
+                                if (currentBot != null) currentBot.sendFile(uid, data,
+                                    (song.isBlank() ? "music" : song) + ".mp3", "🎵 " + song);
+                            } catch (Exception ignored) {}
+                        });
+                    }
+                }
+                return result;
+            }));
     }
 
     /** 快捷构建 FunctionDefinition */
@@ -1249,15 +1221,7 @@ public class BotApp {
 
     // ---- 语音消息（提取文字 → 统一路由 → 强制语音回复）----
 
-    private static void handleVoice(ILinkBot bot, AiService ai, SpeechService tts,
-                                     CalculatorService calc,
-                                     RandomService random, ExpressService express,
-                                     FootballService football, DietService diet,
-                                     WeatherBotService weather, VisionService vision,
-                                     ImageGenService imageGen, NewsService news,
-                                     FinanceService finance,
-                                     WebReaderService webReader,
-                                     BotMessage msg) {
+    private static void handleVoice(ILinkBot bot, BotContext ctx, BotMessage msg) {
         String userId = msg.userId();
         String text = msg.voiceText();
         if (text == null || text.isBlank()) {
@@ -1267,7 +1231,7 @@ public class BotApp {
 
         System.out.println("[Bot] 🎤 语音识别: " + text);
         // 统一走文字路由，forceVoice=true 确保回复一定带语音
-        processTextMessage(bot, ai, tts, calc, random, express, football, diet, weather, vision, imageGen, news, finance, webReader, userId, text, true);
+        processTextMessage(bot, ctx, userId, text, true);
     }
 
     // ---- 工具方法 ----
@@ -1472,19 +1436,15 @@ public class BotApp {
     /** 下载网络图片 */
     private static byte[] downloadImage(String url) {
         try {
-            var client = java.net.http.HttpClient.newBuilder()
-                .connectTimeout(java.time.Duration.ofSeconds(10))
-                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-                .build();
             var request = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(url))
                 .header("User-Agent", "Mozilla/5.0 (compatible; WeChatBot/1.0)")
                 .GET().build();
-            var response = client.send(request,
+            var response = SHARED_HTTP.send(request,
                 java.net.http.HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() == 200) {
                 byte[] data = response.body();
-                if (data.length > 0 && data.length < 5 * 1024 * 1024) return data; // <5MB
+                if (data.length > 0 && data.length < 5 * 1024 * 1024) return data;
             }
         } catch (Exception e) {
             System.err.println("[图片下载] 失败: " + url + " — " + e.getMessage());
@@ -1515,6 +1475,24 @@ public class BotApp {
         if (gs.playerName(userId) == null && !gs.boundUsers().contains(userId)) return false;
 
         String speakerName = gs.playerName(userId);
+        // 猎人被投出后可以开枪——在死亡检查之前拦截
+        if (speakerName != null && gs.engine() instanceof WerewolfEngine we
+            && we.isHunterPending() && speakerName.equals(we.hunterPendingName())) {
+            String hunterResult = we.handleHunterShot(speakerName, text, gs);
+            if (hunterResult != null) {
+                for (String name : gs.playerNames()) {
+                    String uid = gs.getUserId(name);
+                    if (uid == null) continue;
+                    String bn = gs.getPlayerBot(name);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(uid, hunterResult);
+                }
+                if (!we.isOver() && we.isNight()) startWerewolfNight(gs, bot);
+                return true;
+            }
+            bot.sendText(userId, "❌ 请输入有效的玩家名，或输入「不开枪」跳过。");
+            return true;
+        }
         if (speakerName != null && !gs.engine().isPlayerAlive(speakerName)) {
             bot.sendText(userId, "💀 你已死亡，无法发言。请安静观战。");
             return true;
@@ -1802,36 +1780,4 @@ public class BotApp {
         }
         // 狼人阶段由系统驱动共识，无需AI
     }
-
-    /* 讨论定时器已取消
-    private static java.util.concurrent.ScheduledFuture<?> discussRemindFuture;
-    private static java.util.concurrent.ScheduledFuture<?> discussEndFuture;
-
-    private static void scheduleDiscussTimer(GameSession gs, ILinkBot fallbackBot) {
-        if (discussRemindFuture != null) discussRemindFuture.cancel(false);
-        if (discussEndFuture != null) discussEndFuture.cancel(false);
-        discussRemindFuture = DAY_TIMER.schedule(() -> broadcastDiscussTimerMsg(gs, fallbackBot),
-            WerewolfEngine.DISCUSS_REMIND_SEC, java.util.concurrent.TimeUnit.SECONDS);
-        discussEndFuture = DAY_TIMER.schedule(() -> broadcastDiscussTimerMsg(gs, fallbackBot),
-            WerewolfEngine.DISCUSS_SEC, java.util.concurrent.TimeUnit.SECONDS);
-    }
-
-    private static void broadcastDiscussTimerMsg(GameSession gs, ILinkBot fallbackBot) {
-        try {
-            if (!(gs.engine() instanceof WerewolfEngine we)) return;
-            String msg = we.checkDiscussTimer();
-            if (msg != null) {
-                for (String name : gs.playerNames()) {
-                    String uid = gs.getUserId(name);
-                    if (uid == null) continue;
-                    String bn = gs.getPlayerBot(name);
-                    ILinkBot tb = bn != null ? cluster.getBot(bn) : fallbackBot;
-                    if (tb != null) tb.sendText(uid, msg);
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[狼人杀:定时] ❌ " + e.getMessage());
-        }
-    }
-    */
 }

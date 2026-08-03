@@ -2,15 +2,7 @@ package org.example.bot.service;
 
 import com.weather.exception.WeatherException;
 import com.weather.service.WeatherService;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Properties;
+import org.example.bot.util.ConfigUtil;
 
 /**
  * 天气查询服务门面 — 封装和风天气 API。
@@ -35,30 +27,12 @@ public class WeatherBotService {
      * @return 可用的实例，如果配置缺失则返回 {@code null}
      */
     public static WeatherBotService create() {
-        String apiKey = null;
-        String weatherHost = null;
+        String apiKey = ConfigUtil.get("qweather.api.key", "QWEATHER_API_KEY");
+        String weatherHost = ConfigUtil.get("qweather.api.host", "QWEATHER_API_HOST");
 
-        apiKey = System.getProperty("qweather.api.key");
-        weatherHost = System.getProperty("qweather.api.host");
-
-        if (isBlank(apiKey))  apiKey = System.getenv("QWEATHER_API_KEY");
-        if (isBlank(weatherHost)) weatherHost = System.getenv("QWEATHER_API_HOST");
-
-        Path configPath = Paths.get("config.properties");
-        if (Files.exists(configPath)) {
-            Properties props = new Properties();
-            try (InputStream in = Files.newInputStream(configPath)) {
-                props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
-                if (isBlank(apiKey)) {
-                    String key = props.getProperty("qweather.api.key");
-                    if (key != null && !key.startsWith("请在此填入")) apiKey = key.strip();
-                }
-                if (isBlank(weatherHost)) {
-                    String host = props.getProperty("qweather.api.host");
-                    if (host != null && !host.startsWith("请在此填入")) weatherHost = host.strip();
-                }
-            } catch (IOException ignored) {}
-        }
+        // 过滤占位符值
+        if (apiKey != null && apiKey.startsWith("请在此填入")) apiKey = null;
+        if (weatherHost != null && weatherHost.startsWith("请在此填入")) weatherHost = null;
 
         if (isBlank(apiKey) || isBlank(weatherHost)) {
             System.out.println("[天气] ⚠ 天气服务未配置");

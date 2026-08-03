@@ -39,10 +39,38 @@ public class UndercoverEngine implements GameEngine {
 
     /* ═══════════════════ 续局状态 ═══════════════════ */
 
+    private final java.util.Set<String> dead = new java.util.HashSet<>();
+
     @Override public boolean isOver() { return over; }
+    @Override public boolean isPlayerAlive(String playerName) { return !dead.contains(playerName); }
 
     @Override public String handle(GameSession s, String uid, String text) {
+        // text != null 意味着这是 AI 的回复，从中解析淘汰和胜负信息
+        if (text != null) {
+            parseAiAnnouncement(text, s);
+        }
         return null; // 全权交给框架的 process()
+    }
+
+    /** 从 AI 回复中解析淘汰通知，更新存活状态 */
+    private void parseAiAnnouncement(String text, GameSession s) {
+        // 检测胜负判定
+        if (text.contains("平民获胜") || text.contains("卧底获胜")) {
+            over = true;
+            return;
+        }
+        // 检测淘汰：AI 通常会宣布 "xxx 被投票淘汰" 或 "xxx 的身份是yyy"
+        for (String name : s.playerNames()) {
+            if (dead.contains(name)) continue;
+            if (text.contains(name + "被") || text.contains(name + " 被")
+                || text.contains("淘汰" + name) || text.contains("投出" + name)
+                || (text.contains(name) && (text.contains("出局") || text.contains("淘汰")))) {
+                dead.add(name);
+                // 更新卧底计数
+                if ("卧底".equals(s.playerRole(name))) undercoverCount--;
+                System.out.println("[卧底] " + name + " 被淘汰（" + undercoverCount + "卧底剩余）");
+            }
+        }
     }
 
     /* ═══════════════════ 系统提示（AI 主持人角色） ═══════════════════ */
@@ -173,15 +201,19 @@ public class UndercoverEngine implements GameEngine {
         sb.append("【主持人内部数据——严禁以任何形式透露给玩家】\n");
 
         // 存活玩家统计
-        sb.append("当前存活 ").append(wordByPlayer.size()).append(" 人").append("（卧底 ").append(undercoverCount).append(" 人）：\n");
+        long aliveCount = roleByPlayer.keySet().stream().filter(n -> !dead.contains(n)).count();
+        sb.append("当前存活 ").append(aliveCount).append(" 人（卧底 ").append(undercoverCount).append(" 人）：\n");
         for (var e : wordByPlayer.entrySet()) {
+            if (dead.contains(e.getKey())) continue; // 跳过已淘汰
             String r = roleByPlayer.get(e.getKey());
             sb.append("  ").append(e.getKey()).append("：词「").append(e.getValue()).append("」身份").append(r).append("\n");
         }
 
-        // 胜负判断公式
-        int aliveCiv = (int) roleByPlayer.values().stream().filter(r -> "平民".equals(r)).count();
-        int aliveUc = (int) roleByPlayer.values().stream().filter(r -> "卧底".equals(r)).count();
+        // 胜负判断公式（只统计存活）
+        int aliveCiv = (int) roleByPlayer.entrySet().stream()
+            .filter(e -> !dead.contains(e.getKey()) && "平民".equals(e.getValue())).count();
+        int aliveUc = (int) roleByPlayer.entrySet().stream()
+            .filter(e -> !dead.contains(e.getKey()) && "卧底".equals(e.getValue())).count();
         sb.append("平民存活 ").append(aliveCiv).append(" 人，卧底存活 ").append(aliveUc).append(" 人\n");
         if (aliveUc == 0) sb.append("→ 平民获胜\n");
         else if (aliveUc >= aliveCiv) sb.append("→ 卧底获胜\n");

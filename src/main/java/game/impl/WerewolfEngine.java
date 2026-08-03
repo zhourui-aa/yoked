@@ -81,7 +81,7 @@ public class WerewolfEngine implements GameEngine {
     public String systemPrompt() {
         int[] c = ROLE_CFG[playerCount - 6];
         return ("""
-            你是狼人杀主持人（仅负责狼人阶段）。%d人局：%d狼人、%d平民、预言家、女巫%s。
+            你是狼人杀主持人（仅负责狼人阶段）。%d人局：%d狼人、%d平民、预言家、女巫%s。女巫解药%s，毒药%s。%s
 
             【你的唯一职责】监听狼人讨论，判断他们何时达成击杀共识。
             当狼人统一目标后，输出【死者:XXX】和【狼人行动结束】。
@@ -96,7 +96,7 @@ public class WerewolfEngine implements GameEngine {
             """)
             .formatted(playerCount, c[IDX_WOLF], c[IDX_CIV],
                 c[IDX_HUNTER] > 0 ? "、猎人" : "",
-                witchAntidoteUsed ? "已用" : "○", witchPoisonUsed ? "已用" : "○",
+                witchAntidoteUsed ? "已用" : "可用", witchPoisonUsed ? "已用" : "可用",
                 c[IDX_HUNTER] > 0 ? "" : "(本局无)");
     }
 
@@ -191,6 +191,38 @@ public class WerewolfEngine implements GameEngine {
      */
     public String handleWolfCommand(String speaker, String text, GameSession session) {
         String cmd = text.strip();
+
+        // 空刀（今晚不杀人）
+        if (cmd.equals("空刀") || cmd.equals("不杀") || cmd.equals("放弃")) {
+            long aliveWolves = session.playerNames().stream()
+                .filter(n -> "狼人".equals(session.playerRole(n)) && isPlayerAlive(n)).count();
+            if (aliveWolves <= 1) {
+                wolfKillTarget = null; // null = 平安夜
+                wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                nightPhase = NightPhase.WITCH;
+                return "🐺 你选择今晚不杀人。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+            }
+            // 多狼需要共识
+            if (wolfProposal != null && wolfProposal.equals("__EMPTY__")) {
+                // 已经有人提议空刀
+                if (wolfAgreed.contains(speaker)) return "❌ 你已经同意空刀了。";
+                wolfAgreed.add(speaker);
+                if (wolfAgreed.size() >= aliveWolves) {
+                    wolfKillTarget = null;
+                    wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                    nightPhase = NightPhase.WITCH;
+                    return "✅ 狼人一致同意今晚不杀人。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+                }
+                return "✅ 你同意空刀。（" + wolfAgreed.size() + "/" + aliveWolves + "）";
+            }
+            // 提议空刀
+            wolfProposal = "__EMPTY__";
+            wolfProposer = speaker;
+            wolfAgreed.clear();
+            wolfAgreed.add(speaker);
+            return "🐺 " + speaker + " 提议今晚不杀人（空刀）。\n其他狼人请回复「同意」或「不同意」（需 " + aliveWolves + " 票）。";
+        }
+
         // 提议击杀
         if (cmd.startsWith("杀") || cmd.startsWith("杀 ")) {
             String target = cmd.startsWith("杀 ") ? cmd.substring(2).strip() : cmd.substring(1).strip();
@@ -198,6 +230,19 @@ public class WerewolfEngine implements GameEngine {
             if (!session.playerNames().contains(target)) return "❌ 没有这个玩家。";
             if (!isPlayerAlive(target)) return "❌ " + target + " 已经死了。";
             if ("狼人".equals(session.playerRole(target))) return "❌ 不能杀狼人同伴。";
+
+            // 计算存活狼人数
+            long aliveWolves = session.playerNames().stream()
+                .filter(n -> "狼人".equals(session.playerRole(n)) && isPlayerAlive(n)).count();
+
+            // 独狼：直接生效，无需等待同伴同意
+            if (aliveWolves <= 1) {
+                wolfKillTarget = target;
+                wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+                nightPhase = NightPhase.WITCH;
+                return "🐺 你决定击杀 " + target + "。\n🐺 狼人请闭眼。\n🔮 女巫请睁眼。";
+            }
+
             wolfProposal = target;
             wolfProposer = speaker;
             wolfAgreed.clear();
@@ -205,7 +250,7 @@ public class WerewolfEngine implements GameEngine {
             // 告诉其他狼人
             StringBuilder sb = new StringBuilder();
             sb.append("🐺 ").append(speaker).append(" 提议击杀 ").append(target).append("。\n");
-            sb.append("其他狼人请回复「同意」或「不同意」。");
+            sb.append("其他狼人请回复「同意」或「不同意」（需 ").append(aliveWolves).append(" 票）。");
             return sb.toString();
         }
         // 同意
@@ -229,8 +274,9 @@ public class WerewolfEngine implements GameEngine {
         // 不同意
         if (cmd.equals("不同意") || cmd.equals("反对")) {
             if (wolfProposal == null) return "❌ 还没有人提议击杀目标。";
+            boolean wasEmpty = "__EMPTY__".equals(wolfProposal);
             wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
-            return "🔄 提议被否决。请重新讨论击杀目标。";
+            return wasEmpty ? "🔄 空刀提议被否决。请重新讨论。" : "🔄 提议被否决。请重新讨论击杀目标。";
         }
         return null; // 普通聊天
     }
@@ -420,6 +466,59 @@ public class WerewolfEngine implements GameEngine {
 
     public DayPhase getDayPhase() { return dayPhase; }
     public boolean isInVotePhase() { return dayPhase == DayPhase.EXILE_VOTE; }
+    /** 猎人被投出后等待开枪，此时允许已死亡的猎人发言 */
+    public boolean isHunterPending() { return hunterCanShoot && dead.contains(hunterPendingName); }
+    public String hunterPendingName() { return hunterPendingName; }
+
+    private String hunterPendingName = null; // 正在等待开枪的猎人名字
+
+    /**
+     * 处理猎人开枪指令。
+     * @return 结果消息（含全员公告），null=无效指令
+     */
+    public String handleHunterShot(String hunterName, String text, GameSession session) {
+        if (!hunterCanShoot || !hunterName.equals(hunterPendingName)) return null;
+        String cmd = text.strip();
+        if (cmd.equals("不开枪") || cmd.equals("放弃")) {
+            hunterCanShoot = false; hunterPendingName = null;
+            return "🔫 " + hunterName + " 选择不开枪。\n\n" + afterHunterShot(session);
+        }
+        String target = extractTarget(cmd, session);
+        if (target == null) return null; // 无效名字，让玩家重试
+        if (target.equals(hunterName)) return "❌ 不能对自己开枪。";
+        dead.add(target);
+        hunterCanShoot = false; hunterPendingName = null;
+        StringBuilder sb = new StringBuilder();
+        sb.append("🔫 ").append(hunterName).append(" 开枪带走了 ").append(target).append("！");
+        if ("狼人".equals(session.playerRole(target)))
+            sb.append("\n💥 ").append(target).append(" 是狼人！");
+        sb.append("\n\n").append(afterHunterShot(session));
+        return sb.toString();
+    }
+
+    /** 猎人开枪后的结算：检查胜负，进入黑夜 */
+    private String afterHunterShot(GameSession session) {
+        long wolvesAlive = session.playerNames().stream()
+            .filter(n -> !dead.contains(n) && "狼人".equals(session.playerRole(n))).count();
+        long goodsAlive = session.playerNames().stream()
+            .filter(n -> !dead.contains(n) && !"狼人".equals(session.playerRole(n))).count();
+        if (wolvesAlive == 0) { over = true; return "🎉 所有狼人被消灭，好人阵营获胜！"; }
+        if (wolvesAlive >= goodsAlive) { over = true; return "🐺 狼人数量占优，狼人阵营获胜！"; }
+        night = true; round++;
+        nightPhase = NightPhase.WOLVES;
+        antidoteUsedThisRound = false;
+        wolfKillTarget = null; witchPoisonTarget = null;
+        wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
+        return "🌙 天黑请闭眼。\n🐺 狼人请睁眼。";
+    }
+
+    /** 从文本提取玩家名 */
+    private String extractTarget(String text, GameSession session) {
+        var sorted = new java.util.ArrayList<>(session.playerNames());
+        sorted.sort((a, b) -> Integer.compare(b.length(), a.length())); // 长名优先
+        for (String n : sorted) { if (text.contains(n)) return n; }
+        return null;
+    }
 
     /** 天亮后逐个叫名投票 */
     public String beginDaytime() {
@@ -529,7 +628,8 @@ public class WerewolfEngine implements GameEngine {
             dead.add(winner);
             sb.append("\n🚫 ").append(winner).append(" 被放逐出局！");
             if ("猎人".equals(session.playerRole(winner)) && hunterCanShoot) {
-                sb.append("\n🔫 ").append(winner).append(" 是猎人，可以开枪带走一人！（输入玩家名）");
+                hunterPendingName = winner;
+                sb.append("\n🔫 ").append(winner).append(" 是猎人，可以开枪带走一人！（输入玩家名，或「不开枪」跳过）");
             }
             long wolvesAlive = session.playerNames().stream()
                 .filter(n -> !dead.contains(n) && "狼人".equals(session.playerRole(n))).count();

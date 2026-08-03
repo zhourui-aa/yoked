@@ -40,6 +40,7 @@ public class RssNewsServiceImpl implements NewsService {
 
     private final HttpClient httpClient;
     private final List<NewsItem> lastResults = new ArrayList<>();
+    private final Object lastResultsLock = new Object(); // 保护 lastResults
 
     public RssNewsServiceImpl() {
         this.httpClient = HttpClient.newBuilder()
@@ -51,7 +52,7 @@ public class RssNewsServiceImpl implements NewsService {
 
     @Override
     public String getNews(String category, int count) {
-        lastResults.clear();
+        synchronized (lastResultsLock) { lastResults.clear(); }
 
         String url = DEFAULT_RSS_SOURCES.getOrDefault(category, DEFAULT_RSS_SOURCES.get("综合"));
         System.out.println("[新闻] 获取 " + category + " 新闻: " + url);
@@ -80,7 +81,7 @@ public class RssNewsServiceImpl implements NewsService {
             }
 
             int limit = Math.min(count, items.size());
-            lastResults.addAll(items.subList(0, limit));
+            synchronized (lastResultsLock) { lastResults.addAll(items.subList(0, limit)); }
 
             StringBuilder sb = new StringBuilder();
             sb.append("【").append(category).append("新闻】最新 ").append(limit).append(" 条：\n\n");
@@ -105,14 +106,16 @@ public class RssNewsServiceImpl implements NewsService {
 
     @Override
     public String getArticleDetail(String query) {
-        if (lastResults.isEmpty()) return "请先查询新闻。";
-
-        NewsItem item = findItem(query);
-        if (item == null) return "未找到包含「" + query + "」的新闻。请确认标题或序号是否正确。";
-        return formatArticle(item);
+        synchronized (lastResultsLock) {
+            if (lastResults.isEmpty()) return "请先查询新闻。";
+            NewsItem item = findItemLocked(query);
+            if (item == null) return "未找到包含「" + query + "」的新闻。请确认标题或序号是否正确。";
+            return formatArticle(item);
+        }
     }
 
-    private NewsItem findItem(String query) {
+    /** 必须在 lastResultsLock 内调用 */
+    private NewsItem findItemLocked(String query) {
         try {
             int index = Integer.parseInt(query.replaceAll("[^0-9]", ""));
             if (index >= 1 && index <= lastResults.size())
@@ -126,7 +129,7 @@ public class RssNewsServiceImpl implements NewsService {
 
     @Override
     public List<NewsItem> getLastResults() {
-        return new ArrayList<>(lastResults);
+        synchronized (lastResultsLock) { return new ArrayList<>(lastResults); }
     }
 
     // ---- 内部方法 ----

@@ -24,7 +24,9 @@ public class GameSession {
     private final Map<String, String> roleByName = new LinkedHashMap<>(); // 玩家名 → 角色
     private final Map<String, String> playerBotName = new LinkedHashMap<>(); // 玩家名 → bot名
     private final List<String> history = new ArrayList<>(); // 共享对话历史
-    private final String gameUserId = "game-" + System.currentTimeMillis(); // 游戏专用虚拟用户
+    private final String gameUserId; // 游戏专用虚拟用户
+    /** AI 上下文最多保留最近 N 条对话（省钱+防超窗） */
+    private static final int MAX_CONTEXT_ENTRIES = 30;
 
     public GameEngine engine() { return engine; }
 
@@ -35,6 +37,7 @@ public class GameSession {
             String name = playerNames[i];
             roleByName.put(name, null); // 角色由引擎 start() 分配
         }
+        this.gameUserId = "game-" + System.currentTimeMillis() + "-" + (int)(Math.random() * 10000);
     }
 
     // ==================== 玩家管理 ====================
@@ -115,8 +118,9 @@ public class GameSession {
         }
         if (!history.isEmpty()) {
             ctx.append("\n游戏对话记录：\n");
-            for (String h : history) {
-                ctx.append(h).append("\n");
+            int start = Math.max(0, history.size() - MAX_CONTEXT_ENTRIES);
+            for (int i = start; i < history.size(); i++) {
+                ctx.append(history.get(i)).append("\n");
             }
         }
 
@@ -138,7 +142,8 @@ public class GameSession {
         // 包含完整对话历史，让 AI 看到整个故事
         if (!history.isEmpty()) {
             ctx.append("【故事前情提要】\n");
-            for (String h : history) ctx.append(h).append("\n");
+            int start = Math.max(0, history.size() - MAX_CONTEXT_ENTRIES);
+            for (int i = start; i < history.size(); i++) ctx.append(history.get(i)).append("\n");
             ctx.append("\n");
         }
         ctx.append(promptText);
@@ -155,8 +160,9 @@ public class GameSession {
         return null;
     }
 
-    /** 清空 GameUserId 的对话历史（避免跨游戏污染） */
+    /** 清空游戏会话的 AI 对话历史，避免跨游戏污染 */
     public void clear() {
-        ai.getHelpMessage(); // no-op，占位
+        history.clear();
+        ai.clearSession(gameUserId);
     }
 }

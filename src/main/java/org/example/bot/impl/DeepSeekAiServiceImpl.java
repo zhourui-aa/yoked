@@ -68,6 +68,11 @@ public class DeepSeekAiServiceImpl implements AiService {
         sessionManager.setPersona(userId, persona);
     }
 
+    @Override
+    public void clearSession(String userId) {
+        sessionManager.clearCurrent(userId);
+    }
+
     // ---- 多会话聊天 ----
 
     @Override
