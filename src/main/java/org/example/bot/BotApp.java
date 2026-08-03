@@ -46,6 +46,7 @@ import game.GameSession;
 import game.impl.WerewolfEngine;
 import game.impl.MurderMysteryEngine;
 import game.impl.LifeSimEngine;
+import game.impl.UndercoverEngine;
 import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
@@ -224,6 +225,7 @@ public class BotApp {
         // 注册桌游引擎
         GameRegistry.register(new WerewolfEngine());
         GameRegistry.register(new MurderMysteryEngine());
+        GameRegistry.register(new UndercoverEngine());
         GameRegistry.register(new LifeSimEngine());
         System.out.println("[Bot] 🎮 桌游引擎已注册");
 
