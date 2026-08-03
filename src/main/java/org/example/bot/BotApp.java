@@ -45,6 +45,8 @@ import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
 import game.impl.MurderMysteryEngine;
+import game.impl.LifeSimEngine;
+import game.impl.UndercoverEngine;
 import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
@@ -223,6 +225,8 @@ public class BotApp {
         // 注册桌游引擎
         GameRegistry.register(new WerewolfEngine());
         GameRegistry.register(new MurderMysteryEngine());
+        GameRegistry.register(new UndercoverEngine());
+        GameRegistry.register(new LifeSimEngine());
         System.out.println("[Bot] 🎮 桌游引擎已注册");
 
         // ---- 向工具中心注册所有 FC 工具 ----
@@ -771,7 +775,7 @@ public class BotApp {
         // ---- 新闻详情（条件：新闻服务可用）----
         toolCenter.register(new ToolDefinition("read_news_article",
             "用户想了解某条新闻的详细内容。用户说「第X条」「某标题详细说说」等时调用。" +
-            "传入新闻标题中的关键词即可，不要编造序号。工具只返回标题和摘要，没有全文。禁止编造正文。",
+            "工具返回原文。你需要整理成300-500字的精简版本，保留关键数据和细节，去掉套话。用2-3段呈现。",
             Map.of("query", Map.of("type", "string",
                 "description", "新闻标题关键词，例如「女排」。不要传序号。")),
             args -> {
@@ -780,6 +784,40 @@ public class BotApp {
                     query = args.get("query").getAsString(); } catch (Exception ignored) {}
                 var newsItems = bs.getNews(ToolCenter.currentUserId());
                 if (newsItems == null) return "请先查询新闻。";
+
+                // 找匹配条目
+                NewsService.NewsItem matched = null;
+                try {
+                    int index = Integer.parseInt(query.replaceAll("[^0-9]", ""));
+                    if (index >= 1 && index <= newsItems.size())
+                        matched = newsItems.get(index - 1);
+                } catch (NumberFormatException ignored) {}
+                if (matched == null) {
+                    for (var item : newsItems) {
+                        if (item.title().contains(query)) { matched = item; break; }
+                    }
+                }
+
+                // 有图就异步下载发送
+                if (matched != null && matched.imageUrls() != null
+                    && !matched.imageUrls().isEmpty()) {
+                    NewsService.NewsItem finalMatched = matched;
+                    String imgUid = ToolCenter.currentUserId();
+                    ILinkBot imgBot = BotCluster.current();
+                    IMAGE_EXECUTOR.submit(() -> {
+                        for (String imgUrl : finalMatched.imageUrls()) {
+                            try {
+                                byte[] imgData = downloadImage(imgUrl);
+                                if (imgData != null) {
+                                    imgBot.sendImage(imgUid, imgData, "news.jpg",
+                                        "📰 " + finalMatched.title());
+                                    break;
+                                }
+                            } catch (Exception ignored) {}
+                        }
+                    });
+                }
+
                 return news.getArticleDetail(query);
             },
             userId -> news.isAvailable()
@@ -1641,6 +1679,29 @@ public class BotApp {
 
     private static boolean isVoiceMode(AiService ai, String userId) {
         return ((DeepSeekAiServiceImpl) ai).getSessionManager().isVoiceMode(userId);
+    }
+
+    /** 下载网络图片 */
+    private static byte[] downloadImage(String url) {
+        try {
+            var client = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofSeconds(10))
+                .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+                .build();
+            var request = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(url))
+                .header("User-Agent", "Mozilla/5.0 (compatible; WeChatBot/1.0)")
+                .GET().build();
+            var response = client.send(request,
+                java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() == 200) {
+                byte[] data = response.body();
+                if (data.length > 0 && data.length < 5 * 1024 * 1024) return data; // <5MB
+            }
+        } catch (Exception e) {
+            System.err.println("[图片下载] 失败: " + url + " — " + e.getMessage());
+        }
+        return null;
     }
 
     /** 清理 TTS 文字：去掉不应朗读的标记，保留语气符号 */

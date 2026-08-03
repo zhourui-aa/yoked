@@ -33,5 +33,9 @@ public interface NewsService {
     default boolean isAvailable() { return true; }
 
     /** 新闻条目 — 供缓存使用 */
-    record NewsItem(String title, String description, String link) {}
+    record NewsItem(String title, String description, String link, List<String> imageUrls) {
+        public NewsItem(String title, String description, String link) {
+            this(title, description, link, List.of());
+        }
+    }
 }
