@@ -2,6 +2,7 @@ package game;
 
 import game.impl.TurtleSoupEngine;
 import game.impl.WerewolfEngine;
+import game.impl.LifeSimEngine;
 import org.example.bot.service.AiService;
 
 import java.util.*;
@@ -19,6 +20,7 @@ public class GameRegistry {
     static {
         register(new WerewolfEngine());
         register(new TurtleSoupEngine());
+        register(new LifeSimEngine());
     }
 
     // ==================== 引擎 ====================

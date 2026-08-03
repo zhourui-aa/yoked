@@ -3,6 +3,7 @@ package game;
 import org.example.bot.ilink.BotCluster;
 import org.example.bot.ilink.ILinkBot;
 import org.example.bot.service.AiService;
+import game.impl.LifeSimEngine;
 
 /**
  * 桌游命令处理。
@@ -20,13 +21,20 @@ public class GameCommand {
                                    BotCluster cluster) {
 
         // ═══════════════════════════════════════════
-        // ⓪ 结束游戏 / 退出游戏
+        // ⓪ 结束游戏 / 退出桌游模式
         // ═══════════════════════════════════════════
-        if (GameRegistry.isRunning() && isQuitCommand(text)) {
-            String gameName = GameRegistry.session().engine().name();
-            GameRegistry.stop();
-            bot.sendText(userId, "🚪 已退出「" + gameName + "」。");
-            return true;
+        if (isQuitCommand(text)) {
+            if (GameRegistry.isRunning()) {
+                String gn = GameRegistry.session().engine().name();
+                GameRegistry.stop();
+                bot.sendText(userId, "🚪 已退出「" + gn + "」。");
+                return true;
+            }
+            if (step != null) {
+                resetState();
+                bot.sendText(userId, "👋 已退出桌游大厅。");
+                return true;
+            }
         }
 
         // 游戏进行中时，拒绝启动新游戏
@@ -94,9 +102,25 @@ public class GameCommand {
             step = "menu";
             var sb = new StringBuilder();
             sb.append("🎮 桌游大厅\n\n可玩：").append(GameRegistry.listGames());
-            sb.append("\n\n请输入「游戏名 人数」开始，例如：狼人杀 6");
+            sb.append("\n\n单人游戏直接输入「游戏名」即可。\n多人游戏输入「游戏名 人数」，例如：狼人杀 6");
             bot.sendText(userId, sb.toString());
             return true;
+        }
+
+        // ═══════════════════════════════════════════
+        // ③.⑤ Menu 模式下直接输入游戏名（不含人数）
+        // ═══════════════════════════════════════════
+        if ("menu".equals(step)) {
+            var engine = GameRegistry.get(text);
+            if (engine != null) {
+                if (engine.minPlayers() == 1 && engine.maxPlayers() == 1) {
+                    return startSinglePlayerGame(bot, ai, userId, engine);
+                }
+                gameName = text;
+                bot.sendText(userId, "🎮 「" + text + "」已选择。\n"
+                    + "请输入人数（" + engine.minPlayers() + "-" + engine.maxPlayers() + "人），例如：" + text + " " + engine.minPlayers());
+                return true;
+            }
         }
 
         // ═══════════════════════════════════════════
@@ -111,6 +135,10 @@ public class GameCommand {
                     int count;
                     try { count = Integer.parseInt(parts[1]); } catch (NumberFormatException e) { return false; }
                     if (count >= engine.minPlayers() && count <= engine.maxPlayers()) {
+                        // 单人游戏直接开始
+                        if (engine.minPlayers() == 1 && engine.maxPlayers() == 1) {
+                            return startSinglePlayerGame(bot, ai, userId, engine);
+                        }
                         gameName = parts[0];
                         totalSlots = count;
                         step = "codename";
@@ -378,16 +406,27 @@ public class GameCommand {
 
     /** 启动单人游戏（跳过 lobby 流程） */
     private static boolean startSinglePlayerGame(ILinkBot bot, AiService ai, String userId, GameEngine engine) {
+        try {
         String playerName = "玩家";
         GameRegistry.start(engine, ai, new String[]{playerName});
         var session = GameRegistry.session();
         session.bindUser(userId, playerName);
 
         String announce = engine.start(session);
-        String reply = session.prompt(announce);
 
-        bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + reply);
+        if (engine instanceof LifeSimEngine sim) {
+            bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + sim.welcomeMessage());
+        } else {
+            String reply = session.prompt(announce);
+            bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + reply);
+        }
         System.out.println("[游戏] " + engine.name() + " 单人游戏开始");
+        } catch (Exception e) {
+            System.err.println("[GameCommand] ❌ startSinglePlayerGame 异常: " + e.getMessage());
+            e.printStackTrace();
+            bot.sendText(userId, "游戏启动失败：" + e.getMessage());
+            return false;
+        }
         return true;
     }
 
@@ -425,8 +464,10 @@ public class GameCommand {
     public static boolean isQuitCommand(String text) {
         if (text == null) return false;
         String t = text.trim();
-        return t.equals("结束游戏") || t.equals("退出游戏")
-            || t.equals("不玩了") || t.equals("退出")
-            || t.equals("结束") || t.equalsIgnoreCase("quit");
+        return t.equals("结束游戏") || t.equals("退出游戏") || t.equals("退出桌游模式")
+            || t.equals("退出桌游") || t.equals("不玩了") || t.equals("退出")
+            || t.equals("结束") || t.equals("返回") || t.equals("取消")
+            || t.equals("再来一局") || t.equals("重开") || t.equals("重新开始")
+            || t.equalsIgnoreCase("quit");
     }
 }

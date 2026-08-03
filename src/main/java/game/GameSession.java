@@ -131,8 +131,19 @@ public class GameSession {
 
     /** GameEngine 直接调用 DeepSeek，用于夜晚阶段等内部逻辑 */
     public String prompt(String promptText) {
-        String reply = ai.chat(gameUserId, promptText);
-        history.add("[系统] " + promptText + "\n[主持人] " + reply);
+        StringBuilder ctx = new StringBuilder();
+        ctx.append(engine.systemPrompt()).append("\n\n");
+        String state = engine.stateContext();
+        if (!state.isEmpty()) ctx.append(state).append("\n\n");
+        // 包含完整对话历史，让 AI 看到整个故事
+        if (!history.isEmpty()) {
+            ctx.append("【故事前情提要】\n");
+            for (String h : history) ctx.append(h).append("\n");
+            ctx.append("\n");
+        }
+        ctx.append(promptText);
+        String reply = ai.chat(gameUserId, ctx.toString());
+        history.add("[主持人] " + reply);
         return reply;
     }
 
