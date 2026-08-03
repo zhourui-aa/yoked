@@ -1,12 +1,9 @@
 package org.example.bot.impl;
 
-import org.example.bot.service.DatabaseService;
-
 import java.util.*;
 
 /**
  * 多会话管理器 — 每个用户可以创建多个独立对话，互不影响。
- * 支持 SQLite 持久化：会话列表、用户偏好、语音模式等重启后自动恢复。
  */
 public class SessionManager {
 
@@ -40,12 +37,6 @@ public class SessionManager {
         🎵 切换音色 — "切换音色 Ethan" 切换 TTS 音色（14种）
         🤖 多 Bot — "新建bot 客服2号" 运行时新增微信号
 
-        🎮 桌游模式 — 输入「桌游模式」开启：
-        ① 输入「游戏名 人数」如：狼人杀 6
-        ② 输入你的代号，如：周瑞
-        ③ 输入「加入 昵称」为他人生成专属二维码
-        ④ 所有人扫码后自动开始
-
         📂 会话管理：
         • 新建对话「名称」
         • 切换到「名称」对话
@@ -61,15 +52,10 @@ public class SessionManager {
     // 全局默认人设和技术指令
     private final String defaultPersona;
     private final String techInstructions;
-    // 数据库持久化
-    private final DatabaseService db;
-    // 已从 DB 恢复的用户
-    private final Set<String> restored = new HashSet<>();
 
-    public SessionManager(String defaultPersona, String techInstructions, DatabaseService db) {
+    public SessionManager(String defaultPersona, String techInstructions) {
         this.defaultPersona = defaultPersona;
         this.techInstructions = techInstructions;
-        this.db = db;
     }
 
     /** 构建完整 system prompt */
@@ -77,92 +63,46 @@ public class SessionManager {
         return s.persona + "\n" + techInstructions;
     }
 
-    /** 从 DB 恢复用户的所有状态 */
-    private synchronized void restoreIfNeeded(String userId) {
-        if (!restored.add(userId)) return;
-        if (db == null) return;
-
-        // 1. 恢复会话列表
-        var metas = db.loadSessionMetas(userId);
-        Map<String, Session> userSessions = new LinkedHashMap<>();
-        for (var m : metas) {
-            Session s = new Session(m.name(), m.persona().isEmpty() ? defaultPersona : m.persona());
-            userSessions.put(m.name(), s);
-        }
-        if (!userSessions.isEmpty()) {
-            sessions.put(userId, userSessions);
-        }
-
-        // 2. 恢复当前会话
-        String cur = db.loadUserPref(userId, "current_session");
-        if (cur != null && !cur.isBlank()) {
-            currentSession.put(userId, cur);
-        } else if (userSessions.isEmpty()) {
-            currentSession.put(userId, "默认");
-        }
-
-        // 3. 恢复语音模式
-        String vm = db.loadUserPref(userId, "voice_mode");
-        if ("true".equals(vm)) voiceMode.put(userId, true);
-    }
-
     /** 获取当前会话（没有则创建默认会话） */
     public synchronized Session getOrCreate(String userId) {
-        restoreIfNeeded(userId);
         String name = currentSession.get(userId);
         if (name == null) {
             name = "默认";
             currentSession.put(userId, name);
-            if (db != null) db.saveUserPref(userId, "current_session", name);
         }
         final String sessionName = name;
         Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
-        Session s = userSessions.computeIfAbsent(sessionName, k -> {
-            Session ns = new Session(sessionName, defaultPersona);
-            if (db != null) db.saveSessionMeta(userId, sessionName, defaultPersona);
-            return ns;
-        });
-        setCurrentSessionTag(sessionName);
-        return s;
+        return userSessions.computeIfAbsent(sessionName, k -> new Session(sessionName, defaultPersona));
     }
 
     /** 创建新会话并切换过去 */
     public synchronized Session createSession(String userId, String name) {
         name = name.strip();
         if (name.isEmpty()) name = "未命名";
-        restoreIfNeeded(userId);
 
         Map<String, Session> userSessions = sessions.computeIfAbsent(userId, k -> new LinkedHashMap<>());
+        // 确保默认会话始终存在
         if (!userSessions.containsKey("默认")) {
             userSessions.put("默认", new Session("默认", defaultPersona));
         }
+        // 同名覆盖
         Session session = new Session(name, defaultPersona);
         userSessions.put(name, session);
         currentSession.put(userId, name);
-        setCurrentSessionTag(name);
-
-        if (db != null) {
-            db.saveSessionMeta(userId, name, defaultPersona);
-            db.saveUserPref(userId, "current_session", name);
-        }
         return session;
     }
 
     /** 切换到已有会话，不存在则创建 */
     public synchronized Session switchTo(String userId, String name) {
         name = name.strip();
-        restoreIfNeeded(userId);
         currentSession.put(userId, name);
-        setCurrentSessionTag(name);
-        if (db != null) db.saveUserPref(userId, "current_session", name);
         return getOrCreate(userId);
     }
 
     /** 删除会话，不允许删除最后一个 */
     public synchronized String deleteSession(String userId, String name) {
         name = name.strip();
-        restoreIfNeeded(userId);
-        getOrCreate(userId);
+        getOrCreate(userId);  // 确保默认存在
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null || userSessions.size() <= 1) {
             return "不能删除唯一的对话，至少保留一个。";
@@ -170,16 +110,10 @@ public class SessionManager {
         Session removed = userSessions.remove(name);
         if (removed == null) return "找不到对话「" + name + "」。";
 
-        if (db != null) {
-            db.deleteSessionMeta(userId, name);
-            db.clearChats(userId, name);
-        }
-
+        // 如果删除的是当前会话，切到第一个
         if (name.equals(currentSession.get(userId))) {
             String first = userSessions.keySet().iterator().next();
             currentSession.put(userId, first);
-            setCurrentSessionTag(first);
-            if (db != null) db.saveUserPref(userId, "current_session", first);
             return "已删除「" + name + "」，当前对话：「" + first + "」。";
         }
         return "已删除对话「" + name + "」。";
@@ -187,7 +121,9 @@ public class SessionManager {
 
     /** 列出所有会话 */
     public synchronized String listSessions(String userId) {
+        // 确保至少有一个默认会话
         getOrCreate(userId);
+
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null || userSessions.isEmpty()) return "你还没有任何对话。";
 
@@ -204,6 +140,7 @@ public class SessionManager {
         return sb.toString().strip();
     }
 
+    /** 获取对话历史长度，用于决定是否发帮助 */
     public synchronized int historySize(String userId) {
         Map<String, Session> userSessions = sessions.get(userId);
         if (userSessions == null) return 0;
@@ -213,18 +150,16 @@ public class SessionManager {
         return s != null ? s.roles.size() : 0;
     }
 
+    /** 清空当前会话（不删除） */
     public synchronized void clearCurrent(String userId) {
         Session s = getOrCreate(userId);
         s.clear();
-        String sessionName = currentSession.get(userId);
-        if (db != null && sessionName != null) db.clearChats(userId, sessionName);
     }
 
+    /** 修改当前会话的人设 */
     public synchronized void setPersona(String userId, String persona) {
         Session s = getOrCreate(userId);
         s.persona = persona;
-        String name = currentSession.get(userId);
-        if (db != null && name != null) db.saveSessionMeta(userId, name, persona);
     }
 
     /** 查看当前人设 */
@@ -233,25 +168,20 @@ public class SessionManager {
         return "🎭 当前人设：「" + s.persona + "」";
     }
 
+    /** 切换语音模式 */
     public synchronized boolean toggleVoiceMode(String userId) {
-        restoreIfNeeded(userId);
         boolean current = voiceMode.getOrDefault(userId, false);
         voiceMode.put(userId, !current);
-        if (db != null) db.saveUserPref(userId, "voice_mode", String.valueOf(!current));
         return !current;
     }
 
+    /** 查询语音模式是否开启 */
     public synchronized boolean isVoiceMode(String userId) {
-        restoreIfNeeded(userId);
         return voiceMode.getOrDefault(userId, false);
     }
 
+    /** 获取所有 session 快照（用于恢复等） */
     public synchronized Map<String, Session> getAllSessions(String userId) {
         return sessions.getOrDefault(userId, Collections.emptyMap());
-    }
-
-    /** 设置 ThreadLocal 当前会话名，供 SqliteDatabaseServiceImpl 使用 */
-    private void setCurrentSessionTag(String name) {
-        if (name != null) SqliteDatabaseServiceImpl.CURRENT_SESSION.set(name);
     }
 }
