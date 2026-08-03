@@ -340,220 +340,8 @@ public class BotApp {
                                            FinanceService finance,
                                            WebReaderService webReader,
                                            String userId, String text, boolean forceVoice) {
-        // ⓪ 游戏模式 — 如果正在玩游戏且用户是玩家，消息路由到游戏会话
-        if (GameRegistry.isRunning()) {
-            GameSession gs = GameRegistry.session();
-            if (gs.playerName(userId) != null || gs.boundUsers().contains(userId)) {
-                String speakerName = gs.playerName(userId);
-                // 死者不能发言
-                if (speakerName != null && !gs.engine().isPlayerAlive(speakerName)) {
-                    bot.sendText(userId, "💀 你已死亡，无法发言。请安静观战。");
-                    return;
-                }
-                boolean wasNight = gs.engine().isNight();
-
-                // —— 夜晚发言权限检查：只有当前活跃角色可以说话 ——
-                if (wasNight && gs.engine() instanceof WerewolfEngine we
-                    && speakerName != null && we.isPlayerAlive(speakerName)) {
-                    if (!we.canSpeakAtNight(speakerName, gs)) {
-                        bot.sendText(userId, "🌙 现在是" + we.activeRoleName() + "的行动时间，请保持安静。");
-                        return;
-                    }
-                }
-
-                // —— 狼人指令拦截（系统驱动共识）——
-                if (wasNight && gs.engine() instanceof WerewolfEngine we
-                    && we.getNightPhase() == WerewolfEngine.NightPhase.WOLVES
-                    && speakerName != null && we.isPlayerAlive(speakerName)) {
-                    String wolfResult = we.handleWolfCommand(speakerName, text, gs);
-                    if (wolfResult != null) {
-                        if (wolfResult.startsWith("🐺") || wolfResult.startsWith("✅") || wolfResult.startsWith("🔄")) {
-                            // 狼人内部消息→发给所有狼人
-                            for (String name : gs.playerNames()) {
-                                if (!"狼人".equals(gs.playerRole(name)) || !we.isPlayerAlive(name)) continue;
-                                String uid = gs.getUserId(name);
-                                if (uid == null) continue;
-                                String bn = gs.getPlayerBot(name);
-                                ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                if (tb != null) tb.sendText(uid, wolfResult);
-                            }
-                        }
-                        // 共识达成→包含阶段公告，全员广播
-                        if (wolfResult.contains("狼人请闭眼")) {
-                            String[] parts = wolfResult.split("\n", 2);
-                            if (parts.length == 2) {
-                                for (String name : gs.playerNames()) {
-                                    String uid = gs.getUserId(name);
-                                    if (uid == null) continue;
-                                    String bn = gs.getPlayerBot(name);
-                                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                    if (tb != null && !"狼人".equals(gs.playerRole(name)))
-                                        tb.sendText(uid, parts[1]);
-                                }
-                            }
-                            // 通知女巫
-                            sendWitchPrompt(gs, bot, we);
-                        }
-                        return;
-                    }
-                    if (text.strip().equals("同意") || text.strip().equals("不同意")
-                        || text.strip().equals("反对") || text.strip().startsWith("杀"))
-                        return; // 无效指令已被 handleWolfCommand 处理
-                    // 普通聊天→广播给狼人
-                    broadcastToSameRole(gs, speakerName, text);
-                    return;
-                }
-
-                // —— 女巫指令拦截（系统驱动，不经过AI）——
-                if (wasNight && gs.engine() instanceof WerewolfEngine we
-                    && we.getNightPhase() == WerewolfEngine.NightPhase.WITCH
-                    && speakerName != null) {
-                    String witchResult = we.handleWitchCommand(text, gs);
-                    if (witchResult != null) {
-                        // 拆出公告部分（"🔮 女巫请闭眼。\n🔍 预言家请睁眼。"）全员广播
-                        // 确认部分（如"✅ 已使用解药。"）只发女巫
-                        String[] parts = witchResult.split("\n", 2);
-                        String confirm = parts[0];
-                        String announce = parts.length == 2 ? parts[1] : "";
-                        bot.sendText(userId, confirm);
-                        if (!announce.isBlank()) {
-                            for (String name : gs.playerNames()) {
-                                String uid = gs.getUserId(name);
-                                if (uid == null) continue;
-                                String bn = gs.getPlayerBot(name);
-                                ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                if (tb != null) tb.sendText(uid, announce);
-                            }
-                        }
-                        sendSeerPrompt(gs, bot);
-                        return;
-                    }
-                    bot.sendText(userId, "❌ 无效指令。请输入「救」「毒 玩家名」或「不用」。");
-                    return;
-                }
-
-                // —— 预言家查验拦截（系统直接查角色）——
-                if (wasNight && gs.engine() instanceof WerewolfEngine we
-                    && we.getNightPhase() == WerewolfEngine.NightPhase.SEER
-                    && speakerName != null) {
-                    String seerResult = we.handleSeerTarget(text, gs);
-                    if (seerResult != null) {
-                        // 发给预言家结果
-                        bot.sendText(userId, seerResult);
-                        // 天亮公告发给全员
-                        String dawnAnnounce = seerResult.contains("天亮了") ?
-                            seerResult.substring(seerResult.indexOf("☀️")) : seerResult;
-                        for (String name : gs.playerNames()) {
-                            String uid = gs.getUserId(name);
-                            if (uid == null) continue;
-                            String bn = gs.getPlayerBot(name);
-                            ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                            if (tb != null && !uid.equals(userId)) tb.sendText(uid, dawnAnnounce);
-                        }
-                        // 启动白天
-                        if (!we.isNight()) {
-                            String dayAnnounce = we.beginDaytime();
-                            for (String name : gs.playerNames()) {
-                                String uid = gs.getUserId(name);
-                                if (uid == null) continue;
-                                String bn = gs.getPlayerBot(name);
-                                ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                if (tb != null) tb.sendText(uid, dayAnnounce);
-                            }
-                            //scheduleDiscussTimer(gs, bot);
-                        }
-                        return;
-                    }
-                    bot.sendText(userId, "❌ 请输入你要查验的玩家名。");
-                    return;
-                }
-
-                // —— 狼人杀白天投票拦截 ——
-                if (gs.engine() instanceof WerewolfEngine we && we.isInVotePhase()
-                    && speakerName != null && we.isPlayerAlive(speakerName)) {
-                    String voteTarget = extractVoteTarget(text, gs);
-                    if (voteTarget != null) {
-                        String voteResult = we.handleVote(speakerName, voteTarget, gs);
-                        if (voteResult != null) {
-                            if (voteResult.startsWith("❌")) {
-                                bot.sendText(userId, voteResult);
-                            } else {
-                                // 全部投完，广播结果
-                                for (String name : gs.playerNames()) {
-                                    String uid = gs.getUserId(name);
-                                    if (uid == null) continue;
-                                    String bn = gs.getPlayerBot(name);
-                                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                    if (tb != null) tb.sendText(uid, voteResult);
-                                }
-                                if (!we.isOver() && we.isNight() && we.getNightPhase() == WerewolfEngine.NightPhase.WOLVES) {
-                                    startWerewolfNight(gs, bot);
-                                }
-                            }
-                        } else {
-                            // 投票已记录，提示下一个
-                            bot.sendText(userId, "✅ 你投票给了 " + voteTarget + "。");
-                            String nextName = we.currentVoterName();
-                            if (nextName != null) {
-                                String nextUid = gs.getUserId(nextName);
-                                if (nextUid != null) {
-                                    String bn = gs.getPlayerBot(nextName);
-                                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                                    if (tb != null) tb.sendText(nextUid,
-                                        "🗳 " + nextName + " 请投票，说出你要放逐的玩家名。");
-                                }
-                            }
-                        }
-                        return;
-                    }
-                }
-
-                String result = gs.engine().handle(gs, userId, text);
-                if (result == null) {
-                    if (speakerName != null && gs.engine().isPlayerAlive(speakerName)) {
-                        if (wasNight) {
-                            broadcastToSameRole(gs, speakerName, text);
-                        } else {
-                            broadcastPlayerMessage(gs, speakerName, text, bot);
-                        }
-                    }
-                    // 狼人杀白天不调AI（AI只负责狼人阶段，已由系统接管）
-                    if (wasNight || !(gs.engine() instanceof WerewolfEngine)) {
-                        result = gs.process(userId, text);
-                    }
-                }
-                if (result != null) {
-                    String phaseAnnounce = gs.engine().handle(gs, userId, result);
-                    dispatchGameReply(bot, gs, result, userId);
-                    // 阶段公告→全员广播 + 推进下一阶段
-                    handleNightPhaseAdvance(gs, bot, phaseAnnounce);
-                }
-
-                // —— 夜间刚刚结束 → 启动白天流程（先选警长）——
-                if (wasNight && !gs.engine().isNight()
-                    && gs.engine() instanceof WerewolfEngine we
-                    && we.getDayPhase() == WerewolfEngine.DayPhase.NONE) {
-                    String dayAnnounce = we.beginDaytime();
-                    for (String name : gs.playerNames()) {
-                        String uid = gs.getUserId(name);
-                        if (uid == null) continue;
-                        String bn = gs.getPlayerBot(name);
-                        ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
-                        if (tb != null) tb.sendText(uid, dayAnnounce);
-                    }
-                    //scheduleDiscussTimer(gs, bot); // 讨论已取消
-                }
-
-                /* 讨论计时已取消
-                if (gs.engine() instanceof WerewolfEngine we) {
-                    String timerMsg = we.checkDiscussTimer();
-                    ...
-                }
-                */
-
-                return;
-            }
-        }
+        // ⓪ 游戏模式 — 消息路由到游戏会话
+        if (handleGameMessage(bot, userId, text)) return;
 
         // ① 本地命令 — 精确/前缀匹配，零 API 消耗
         if (tryHandleLocalCommand(bot, ai, tts, userId, text)) return;
@@ -1716,6 +1504,211 @@ public class BotApp {
             .replaceAll(" {2,}", " ")
             .strip();
         // 注意：保留 ～ 和 ~ ，它们影响 TTS 的语调和停顿，让语音更自然
+    }
+
+    // ==================== 游戏消息路由 ====================
+
+    /** 处理游戏中的玩家消息，返回 true 表示消息已被消费 */
+    private static boolean handleGameMessage(ILinkBot bot, String userId, String text) {
+        if (!GameRegistry.isRunning()) return false;
+        GameSession gs = GameRegistry.session();
+        if (gs.playerName(userId) == null && !gs.boundUsers().contains(userId)) return false;
+
+        String speakerName = gs.playerName(userId);
+        if (speakerName != null && !gs.engine().isPlayerAlive(speakerName)) {
+            bot.sendText(userId, "💀 你已死亡，无法发言。请安静观战。");
+            return true;
+        }
+        boolean wasNight = gs.engine().isNight();
+
+        // 夜晚发言权限
+        if (wasNight && gs.engine() instanceof WerewolfEngine we
+            && speakerName != null && we.isPlayerAlive(speakerName)) {
+            if (!we.canSpeakAtNight(speakerName, gs)) {
+                bot.sendText(userId, "🌙 现在是" + we.activeRoleName() + "的行动时间，请保持安静。");
+                return true;
+            }
+        }
+
+        // 狼人指令
+        if (handleWerewolfCommand(gs, bot, userId, text, speakerName, wasNight)) return true;
+        // 女巫指令
+        if (handleWitchCommand(gs, bot, userId, text, speakerName, wasNight)) return true;
+        // 预言家查验
+        if (handleSeerCheck(gs, bot, userId, text, speakerName, wasNight)) return true;
+        // 投票
+        if (handleVoteMessage(gs, bot, userId, text, speakerName)) return true;
+
+        // 通用消息处理
+        String result = gs.engine().handle(gs, userId, text);
+        if (result == null) {
+            if (speakerName != null && gs.engine().isPlayerAlive(speakerName)) {
+                if (wasNight) broadcastToSameRole(gs, speakerName, text);
+                else broadcastPlayerMessage(gs, speakerName, text, bot);
+            }
+            if (wasNight || !(gs.engine() instanceof WerewolfEngine)) {
+                result = gs.process(userId, text);
+            }
+        }
+        if (result != null) {
+            String phaseAnnounce = gs.engine().handle(gs, userId, result);
+            dispatchGameReply(bot, gs, result, userId);
+            handleNightPhaseAdvance(gs, bot, phaseAnnounce);
+        }
+
+        // 夜间结束→启动白天
+        if (wasNight && !gs.engine().isNight()
+            && gs.engine() instanceof WerewolfEngine we2
+            && we2.getDayPhase() == WerewolfEngine.DayPhase.NONE) {
+            String dayAnnounce = we2.beginDaytime();
+            for (String name : gs.playerNames()) {
+                String uid = gs.getUserId(name);
+                if (uid == null) continue;
+                String bn = gs.getPlayerBot(name);
+                ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                if (tb != null) tb.sendText(uid, dayAnnounce);
+            }
+        }
+        return true;
+    }
+
+    /** 狼人指令拦截 */
+    private static boolean handleWerewolfCommand(GameSession gs, ILinkBot bot,
+            String userId, String text, String speakerName, boolean wasNight) {
+        if (!wasNight || !(gs.engine() instanceof WerewolfEngine we)
+            || we.getNightPhase() != WerewolfEngine.NightPhase.WOLVES
+            || speakerName == null || !we.isPlayerAlive(speakerName)) return false;
+        String wolfResult = we.handleWolfCommand(speakerName, text, gs);
+        if (wolfResult != null) {
+            if (wolfResult.startsWith("🐺") || wolfResult.startsWith("✅") || wolfResult.startsWith("🔄")) {
+                for (String name : gs.playerNames()) {
+                    if (!"狼人".equals(gs.playerRole(name)) || !we.isPlayerAlive(name)) continue;
+                    String uid = gs.getUserId(name);
+                    if (uid == null) continue;
+                    String bn = gs.getPlayerBot(name);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(uid, wolfResult);
+                }
+            }
+            if (wolfResult.contains("狼人请闭眼")) {
+                String[] parts = wolfResult.split("\n", 2);
+                if (parts.length == 2) {
+                    for (String name : gs.playerNames()) {
+                        String uid = gs.getUserId(name);
+                        if (uid == null) continue;
+                        String bn = gs.getPlayerBot(name);
+                        ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                        if (tb != null && !"狼人".equals(gs.playerRole(name)))
+                            tb.sendText(uid, parts[1]);
+                    }
+                }
+                sendWitchPrompt(gs, bot, we);
+            }
+            return true;
+        }
+        if (text.strip().equals("同意") || text.strip().equals("不同意")
+            || text.strip().equals("反对") || text.strip().startsWith("杀"))
+            return true;
+        broadcastToSameRole(gs, speakerName, text);
+        return true;
+    }
+
+    /** 女巫指令拦截 */
+    private static boolean handleWitchCommand(GameSession gs, ILinkBot bot,
+            String userId, String text, String speakerName, boolean wasNight) {
+        if (!wasNight || !(gs.engine() instanceof WerewolfEngine we)
+            || we.getNightPhase() != WerewolfEngine.NightPhase.WITCH
+            || speakerName == null) return false;
+        String witchResult = we.handleWitchCommand(text, gs);
+        if (witchResult != null) {
+            String[] parts = witchResult.split("\n", 2);
+            bot.sendText(userId, parts[0]);
+            if (parts.length == 2 && !parts[1].isBlank()) {
+                for (String name : gs.playerNames()) {
+                    String uid = gs.getUserId(name);
+                    if (uid == null) continue;
+                    String bn = gs.getPlayerBot(name);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(uid, parts[1]);
+                }
+            }
+            sendSeerPrompt(gs, bot);
+            return true;
+        }
+        bot.sendText(userId, "❌ 无效指令。请输入「救」「毒 玩家名」或「不用」。");
+        return true;
+    }
+
+    /** 预言家查验拦截 */
+    private static boolean handleSeerCheck(GameSession gs, ILinkBot bot,
+            String userId, String text, String speakerName, boolean wasNight) {
+        if (!wasNight || !(gs.engine() instanceof WerewolfEngine we)
+            || we.getNightPhase() != WerewolfEngine.NightPhase.SEER
+            || speakerName == null) return false;
+        String seerResult = we.handleSeerTarget(text, gs);
+        if (seerResult != null) {
+            bot.sendText(userId, seerResult);
+            String dawnAnnounce = seerResult.contains("天亮了")
+                ? seerResult.substring(seerResult.indexOf("☀️")) : seerResult;
+            for (String name : gs.playerNames()) {
+                String uid = gs.getUserId(name);
+                if (uid == null) continue;
+                String bn = gs.getPlayerBot(name);
+                ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                if (tb != null && !uid.equals(userId)) tb.sendText(uid, dawnAnnounce);
+            }
+            if (!we.isNight()) {
+                String dayAnnounce = we.beginDaytime();
+                for (String name : gs.playerNames()) {
+                    String uid = gs.getUserId(name);
+                    if (uid == null) continue;
+                    String bn = gs.getPlayerBot(name);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(uid, dayAnnounce);
+                }
+            }
+            return true;
+        }
+        bot.sendText(userId, "❌ 请输入你要查验的玩家名。");
+        return true;
+    }
+
+    /** 白天投票拦截 */
+    private static boolean handleVoteMessage(GameSession gs, ILinkBot bot,
+            String userId, String text, String speakerName) {
+        if (!(gs.engine() instanceof WerewolfEngine we) || !we.isInVotePhase()
+            || speakerName == null || !we.isPlayerAlive(speakerName)) return false;
+        String voteTarget = extractVoteTarget(text, gs);
+        if (voteTarget == null) return false;
+        String voteResult = we.handleVote(speakerName, voteTarget, gs);
+        if (voteResult != null) {
+            if (voteResult.startsWith("❌")) {
+                bot.sendText(userId, voteResult);
+            } else {
+                for (String name : gs.playerNames()) {
+                    String uid = gs.getUserId(name);
+                    if (uid == null) continue;
+                    String bn = gs.getPlayerBot(name);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(uid, voteResult);
+                }
+                if (!we.isOver() && we.isNight() && we.getNightPhase() == WerewolfEngine.NightPhase.WOLVES)
+                    startWerewolfNight(gs, bot);
+            }
+        } else {
+            bot.sendText(userId, "✅ 你投票给了 " + voteTarget + "。");
+            String nextName = we.currentVoterName();
+            if (nextName != null) {
+                String nextUid = gs.getUserId(nextName);
+                if (nextUid != null) {
+                    String bn = gs.getPlayerBot(nextName);
+                    ILinkBot tb = bn != null ? cluster.getBot(bn) : bot;
+                    if (tb != null) tb.sendText(nextUid,
+                        "🗳 " + nextName + " 请投票，说出你要放逐的玩家名。");
+                }
+            }
+        }
+        return true;
     }
 
     // ==================== 狼人杀夜晚阶段推进 ====================
