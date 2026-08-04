@@ -49,7 +49,7 @@ public class Diagnostic {
         // 4. 天气服务
         System.out.println("\n--- 4. 天气服务 ---");
         try {
-            WeatherBotService weather = WeatherBotService.create();
+            WeatherServiceImpl weather = WeatherServiceImpl.create();
             if (weather != null) {
                 System.out.println("  ✅ 创建成功");
                 String result = weather.query("北京");

@@ -1,6 +1,7 @@
 package org.example.bot;
 
 import org.example.bot.service.*;
+import org.example.bot.impl.WeatherServiceImpl;
 import org.example.bot.tools.ToolCenter;
 import org.example.bot.skill.SkillManager;
 import org.example.bot.rag.RAGPipeline;
@@ -17,7 +18,7 @@ public class BotContext {
     public final ExpressService express;
     public final FootballService football;
     public final DietService diet;
-    public final WeatherBotService weather;
+    public final WeatherServiceImpl weather;
     public final VisionService vision;
     public final ImageGenService imageGen;
     public final NewsService news;
@@ -34,7 +35,7 @@ public class BotContext {
 
     public BotContext(AiService ai, SpeechService tts, CalculatorService calc,
                       RandomService random, ExpressService express, FootballService football,
-                      DietService diet, WeatherBotService weather, VisionService vision,
+                      DietService diet, WeatherServiceImpl weather, VisionService vision,
                       ImageGenService imageGen, NewsService news, FinanceService finance,
                       WebReaderService webReader, WebSearchService search,
                       IdiomService idiom, GarbageService garbage,

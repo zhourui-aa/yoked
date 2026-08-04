@@ -7,7 +7,7 @@ import org.example.bot.service.AiService;
 import org.example.bot.service.ImageGenService;
 import org.example.bot.service.SpeechService;
 import org.example.bot.service.VisionService;
-import org.example.bot.service.WeatherBotService;
+import org.example.bot.impl.WeatherServiceImpl;
 import org.example.bot.impl.DeepSeekAiServiceImpl;
 import org.example.bot.impl.DoubaoVisionServiceImpl;
 import org.example.bot.impl.QwenTtsSpeechServiceImpl;
@@ -173,7 +173,7 @@ public class BotApp {
         ragPipeline.addRetriever(docRetriever);
         System.out.println("[RAG] 向量存储: " + vectorStore.count() + " 条（含文档 " + docChunks + " 条）");
         System.out.println(ragPipeline.summary());
-        WeatherBotService weather = WeatherBotService.create();
+        WeatherServiceImpl weather = WeatherServiceImpl.create();
 
         ImageGenService imageGen = null;
         try { imageGen = new SeedreamImageServiceImpl(); }
@@ -465,7 +465,7 @@ public class BotApp {
     /** 向工具中心注册所有 FC 工具。条件工具使用 ToolCondition 实现 per-request 评估。 */
     private static void registerAllTools(
             AiService ai,
-            WeatherBotService weather, CalculatorService calc,
+            WeatherServiceImpl weather, CalculatorService calc,
             RandomService random, ExpressService express,
             FootballService football, DietService diet,
             ImageGenService imageGen, VisionService vision,
