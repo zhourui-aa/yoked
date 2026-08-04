@@ -37,3 +37,8 @@
 /.cp
 /.cp3.txt
 *.class
+
+# IDEA 老版项目文件
+*.iml
+*.iws
+*.ipr
