@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信 AI 聊天机器人 — 项目解析</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #181a21;
+    --border: #2a2d3a;
+    --text: #c9cdd4;
+    --title: #e5e7eb;
+    --accent: #6c8cff;
+    --accent2: #4ade80;
+    --accent3: #f59e0b;
+    --accent4: #f472b6;
+    --code-bg: #1e2030;
+    --tag-bg: #252838;
+    --danger: #f87171;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.7;
+    padding: 0;
+  }
+
+  /* Hero */
+  .hero {
+    background: linear-gradient(135deg, #1a1c2e 0%, #181a21 50%, #1a1c2e 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 60px 24px 50px;
+    text-align: center;
+  }
+  .hero h1 { font-size: 2.4em; color: #fff; letter-spacing: -0.5px; }
+  .hero p { color: #8b8fa3; font-size: 1.05em; margin-top: 8px; }
+  .hero .badges { margin-top: 20px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+  .badge {
+    background: var(--tag-bg);
+    color: var(--accent);
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 0.85em;
+    border: 1px solid #2a2d44;
+  }
+
+  /* Layout */
+  .container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+
+  /* Section */
+  section { margin-bottom: 50px; }
+  h2 {
+    font-size: 1.55em; color: var(--title);
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .icon { font-size: 1.2em; }
+  h3 { font-size: 1.15em; color: var(--title); margin: 28px 0 12px; }
+  h4 { font-size: 1em; color: var(--accent); margin: 16px 0 8px; font-family: "SF Mono", "Cascadia Code", "Consolas", monospace; }
+
+  /* Cards */
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    transition: border-color .2s;
+  }
+  .card:hover { border-color: #3d4160; }
+  .card .file-path {
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 0.82em;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .card .role {
+    display: inline-block;
+    font-size: 0.72em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+  .role.interface { background: #1e3a2f; color: var(--accent2); }
+  .role.impl { background: #2d2510; color: var(--accent3); }
+  .role.model { background: #251830; color: var(--accent4); }
+  .role.entry { background: #301515; color: var(--danger); }
+  .role.util { background: #1e2638; color: #93a3d3; }
+  .card p { font-size: 0.92em; color: #a0a5b5; }
+
+  /* Architecture diagram */
+  .arch {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 24px;
+    overflow-x: auto;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 0.84em;
+    line-height: 1.8;
+    white-space: pre;
+    color: #9aa0b8;
+  }
+  .arch .hl { color: var(--accent); }
+  .arch .gr { color: var(--accent2); }
+  .arch .yl { color: var(--accent3); }
+  .arch .pk { color: var(--accent4); }
+  .arch .dim { color: #5a5f75; }
+
+  /* FC flow */
+  .fc-flow {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .fc-step {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 12px 0;
+    border-bottom: 1px dashed #252838;
+  }
+  .fc-step:last-child { border-bottom: none; }
+  .fc-num {
+    background: var(--accent);
+    color: #fff;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.78em; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .fc-step .desc { flex:1; }
+  .fc-step .code { font-family: "SF Mono", "Cascadia Code", monospace; font-size: 0.82em; color: var(--accent); }
+
+  /* Tool table */
+  table {
+    width: 100%; border-collapse: collapse;
+    font-size: 0.9em;
+    margin: 16px 0;
+  }
+  th {
+    background: var(--tag-bg);
+    color: #8b8fa3;
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 0.82em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1e2030;
+  }
+  tr:hover td { background: #11131a; }
+  td:first-child { font-family: "SF Mono", "Cascadia Code", monospace; color: var(--accent2); font-size: 0.88em; }
+
+  /* Call chain */
+  .call-chain {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 18px 22px;
+    font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+    font-size: 0.82em;
+    line-height: 2;
+    color: #9aa0b8;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .hero h1 { font-size: 1.6em; }
+    .card-grid { grid-template-columns: 1fr; }
+    .container { padding: 24px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>🤖 微信 AI 聊天机器人</h1>
+  <p>基于 wechat-ilink-sdk · DeepSeek · 火山引擎 · 阿里云 的多模态 AI 微信机器人</p>
+  <div class="badges">
+    <span class="badge">Java 21</span>
+    <span class="badge">wechat-ilink-sdk 2.3.3</span>
+    <span class="badge">DeepSeek v4-pro</span>
+    <span class="badge">Function Calling</span>
+    <span class="badge">多模态</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ============ 架构总览 ============ -->
+<section>
+  <h2><span class="icon">🏗</span> 系统架构总览</h2>
+  <div class="arch">
+<span class="dim">┌─────────────────────────────────────────────────────────────────┐</span>
+<span class="dim">│                        微信客户端                                │</span>
+<span class="dim">└──────────────────────────┬──────────────────────────────────────┘</span>
+                           │
+<span class="dim">┌──────────────────────────▼──────────────────────────────────────┐</span>
+<span class="dim">│</span>  <span class="hl">ILinkBot</span>  <span class="dim">← wechat-ilink-sdk 门面层</span>                       <span class="dim">│</span>
+<span class="dim">│</span>  登录 · 长轮询收消息 · 发文字/图片/文件/语音                       <span class="dim">│</span>
+<span class="dim">└──────────────────────────┬──────────────────────────────────────┘</span>
+                           │  BotMessage
+<span class="dim">┌──────────────────────────▼──────────────────────────────────────┐</span>
+<span class="dim">│</span>  <span class="yl">BotApp</span>  <span class="dim">← 主程序 · 消息路由 · 组装所有组件</span>                    <span class="dim">│</span>
+<span class="dim">│</span>  图片/语音/文件/文字 → 分类路由                                     <span class="dim">│</span>
+<span class="dim">└──┬──────────┬──────────┬──────────┬─────────────────────────────┘</span>
+   │          │          │          │
+<span class="dim">   ▼          ▼          ▼          ▼</span>
+<span class="dim">┌──────┐ ┌──────┐ ┌──────┐ ┌──────────────────────────┐</span>
+<span class="dim">│</span><span class="gr">识图</span><span class="dim">  │ │</span><span class="gr">生图</span><span class="dim">  │ │</span><span class="gr">语音</span><span class="dim">  │ │</span><span class="hl">文字 → processTextMessage()</span><span class="dim">  │</span>
+<span class="dim">│</span>Vision│ │Image │ │Speech│ │                          <span class="dim">│</span>
+<span class="dim">│</span>Service│ │Gen   │ │      │ │ ① 本地命令（零API）     <span class="dim">│</span>
+<span class="dim">│</span>       │ │Service│ │Service│ │ ② buildTools() 构造工具 <span class="dim">│</span>
+<span class="dim">└──┬───┘ └──┬───┘ └──┬───┘ │ ③ chatWithTools() FC  <span class="dim">│</span>
+   │        │        │       │ ④ chat() 自由对话       <span class="dim">│</span>
+<span class="dim">   ▼        ▼        ▼       └──────────┬─────────────┘</span>
+<span class="dim">┌──────────────────────────────────────▼──────────────────────────┐</span>
+<span class="dim">│</span>  <span class="pk">DeepSeekAiServiceImpl</span>  <span class="dim">← AI 核心</span>                           <span class="dim">│</span>
+<span class="dim">│</span>  · chat() 多轮对话 · chatWithTools() Function Calling              <span class="dim">│</span>
+<span class="dim">│</span>  · SessionManager 多会话 · 历史管理                               <span class="dim">│</span>
+<span class="dim">└─────────────────────────────────────────────────────────────────┘</span>
+  </div>
+</section>
+
+<!-- ============ 接口与实现 ============ -->
+<section>
+  <h2><span class="icon">🔌</span> 接口与实现 — 可插拔设计</h2>
+  <p style="color:#8b8fa3; margin-bottom:20px;">
+    每个功能定义为一个<strong>接口</strong>（service/），具体用哪家厂商由<strong>实现类</strong>（impl/）决定。
+    BotApp 只依赖接口，不知道实现细节。换了厂商只需写一个新的 impl，不改主程序。
+  </p>
+
+  <table>
+    <tr><th>接口</th><th>实现类</th><th>服务商</th><th>能力</th></tr>
+    <tr>
+      <td>AiService</td>
+      <td>DeepSeekAiServiceImpl</td>
+      <td>DeepSeek API</td>
+      <td>多轮对话 + Function Calling + 意图识别</td>
+    </tr>
+    <tr>
+      <td>ImageGenService</td>
+      <td>SeedreamImageServiceImpl</td>
+      <td>火山引擎 Ark</td>
+      <td>文字 → AI 生成图片</td>
+    </tr>
+    <tr>
+      <td>VisionService</td>
+      <td>DoubaoVisionServiceImpl</td>
+      <td>火山引擎 Ark</td>
+      <td>图片 → AI 描述分析</td>
+    </tr>
+    <tr>
+      <td>SpeechService</td>
+      <td>QwenTtsSpeechServiceImpl</td>
+      <td>阿里云 DashScope</td>
+      <td>文字 → 语音合成（14 种音色）</td>
+    </tr>
+    <tr>
+      <td style="color:#f59e0b">（无接口，直接类）</td>
+      <td>WeatherBotService</td>
+      <td>和风天气 + Photon</td>
+      <td>城市名 → 实时天气</td>
+    </tr>
+  </table>
+
+  <h3>为什么这样设计？</h3>
+  <div style="color:#8b8fa3; font-size:0.92em;">
+    <p>假设你想把 DeepSeek 换成 OpenAI GPT：</p>
+    <div class="call-chain">
+<span class="dim">// 只需新建一个类：</span>
+<span class="hl">public class</span> <span class="gr">OpenAiServiceImpl</span> <span class="hl">implements</span> AiService {
+    <span class="dim">// 实现 chat()、chatWithTools() 等</span>
+}
+<span class="dim">// BotApp 中改一行：</span>
+AiService ai = <span class="hl">new</span> <span class="gr">OpenAiServiceImpl</span>();  <span class="dim">// ← 就这一行变了</span>
+    </div>
+    <p style="margin-top:12px;">其余代码（BotApp、ILinkBot、所有 handler）完全不用动。这就是接口的意义。</p>
+  </div>
+</section>
+
+<!-- ============ Function Calling ============ -->
+<section>
+  <h2><span class="icon">⚡</span> Function Calling 详解</h2>
+  <p style="color:#8b8fa3; margin-bottom:20px;">
+    这是项目的核心亮点。不再是"关键词匹配 → 调 AI 判断意图 → 执行"的两段式，
+    而是<strong>把 8 个工具一次性注册给 AI，AI 自己决定调用哪个</strong>。一次 API 调用完成。
+  </p>
+
+  <h3>完整流程</h3>
+  <div class="fc-flow">
+    <div class="fc-step">
+      <div class="fc-num">1</div>
+      <div class="desc">
+        <strong>用户发消息</strong>："北京今天天气怎么样？"
+        <div class="code">BotApp.processTextMessage()</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">2</div>
+      <div class="desc">
+        <strong>本地命令检查</strong>：不是"帮助/人设/音色"等精确命令 → 跳过
+        <div class="code">BotApp.tryHandleLocalCommand()</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">3</div>
+      <div class="desc">
+        <strong>构建工具列表</strong>：动态注册所有可用工具（天气/生图/会话/图片追问/文档追问）
+        <div class="code">BotApp.buildTools(tools, executors, ...)</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">4</div>
+      <div class="desc">
+        <strong>发送 AI 请求</strong>：把所有工具定义 + 对话历史一起发给 DeepSeek
+        <div class="code">ai.chatWithTools(userId, text, tools, executors)</div>
+        <div style="color:#5a5f75; font-size:0.82em; margin-top:4px;">⇢ DeepSeekAiServiceImpl 内部：builder.addFunctionTool(weatherFunc).addFunctionTool(drawFunc)...</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">5</div>
+      <div class="desc">
+        <strong>AI 决策</strong>：DeepSeek 分析用户意图，返回 <code style="color:var(--accent2)">tool_calls: [{name: "get_weather", arguments: {city: "北京"}}]</code>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">6</div>
+      <div class="desc">
+        <strong>执行工具</strong>：从 executors Map 中找到 "get_weather" 的执行函数，传入 {city: "北京"}
+        <div class="code">executor.apply(args) → WeatherBotService.query("北京") → "北京 晴 25°C ..."</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">7</div>
+      <div class="desc">
+        <strong>第二轮 AI 调用</strong>：把工具执行结果发回 AI，AI 组织成自然语言
+        <div class="code" style="color:#f59e0b">"北京今天晴天，温度 25°C，体感温度 26°C，适合出行～"</div>
+      </div>
+    </div>
+    <div class="fc-step">
+      <div class="fc-num">8</div>
+      <div class="desc">
+        <strong>发送回复</strong>：文字 + 可选语音
+        <div class="code">bot.sendTextWithTyping() + sendAsVoice()</div>
+      </div>
+    </div>
+  </div>
+
+  <h3>注册的工具清单</h3>
+  <table>
+    <tr><th>工具名</th><th>参数</th><th>触发条件</th><th>谁来执行</th></tr>
+    <tr><td>get_weather</td><td>city: 城市名</td><td>始终可用</td><td>WeatherBotService.query()</td></tr>
+    <tr><td>generate_image</td><td>prompt: 图片描述</td><td>生图服务可用</td><td>SeedreamImageServiceImpl.generate()</td></tr>
+    <tr><td>create_session</td><td>name: 对话名</td><td>始终可用</td><td>SessionManager.createSession()</td></tr>
+    <tr><td>switch_session</td><td>name: 对话名</td><td>始终可用</td><td>SessionManager.switchTo()</td></tr>
+    <tr><td>delete_session</td><td>name: 对话名</td><td>始终可用</td><td>SessionManager.deleteSession()</td></tr>
+    <tr><td>list_sessions</td><td>（无）</td><td>始终可用</td><td>SessionManager.listSessions()</td></tr>
+    <tr><td>ask_about_image</td><td>question: 问题</td><td>有缓存图片</td><td>VisionService.analyze()</td></tr>
+    <tr><td>ask_about_document</td><td>question: 问题</td><td>有缓存文档</td><td>返回文档内容给 AI</td></tr>
+  </table>
+
+  <h3>工具定义在哪里？</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">BotApp.java → buildTools()</div>
+      <div class="role impl">工具定义</div>
+      <p>用 <code>functionDef(name, description, parameters)</code> 构造 FunctionDefinition，同时把 name → executor lambda 放入 Map。两个列表一起传给 AI。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">BotApp.java → functionDef()</div>
+      <div class="role util">快捷构建器</div>
+      <p>把 name + description + Map&lt;String,?&gt; 参数定义 变成 OpenAI SDK 的 FunctionDefinition 对象。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">DeepSeekAiServiceImpl.java → chatWithTools()</div>
+      <div class="role impl">FC 执行引擎</div>
+      <p>接收 tools + executors → builder.addFunctionTool() 注册 → AI 调用 → 检查 tool_calls → 执行 executor → 结果发回 AI → 返回最终文本。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">AiService.java → chatWithTools()</div>
+      <div class="role interface">接口定义</div>
+      <p>在接口层声明了统一 FC 方法。任何 AI 服务实现（DeepSeek/OpenAI/Claude）都要实现它。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 消息路由 ============ -->
+<section>
+  <h2><span class="icon">🚦</span> 消息路由全流程</h2>
+  <div class="call-chain">
+<span class="dim">微信发消息</span>
+  │
+  <span class="dim">▼</span>
+<span class="hl">ILinkBot.startPolling()</span>  <span class="dim">← 长轮询线程：getUpdates() 阻塞等待</span>
+  │  WeixinMessage → toBotMessage() → BotMessage
+  <span class="dim">▼</span>
+<span class="hl">handlerExecutor</span>  <span class="dim">← 单线程保证消息按序处理</span>
+  │
+  <span class="dim">▼</span>
+<span class="yl">BotApp handler lambda</span>  <span class="dim">← 消息分类</span>
+  │
+  ├─ <span class="pk">msg.isVoice()</span>  → handleVoice()  → 提取文字 → processTextMessage(forceVoice=true)
+  ├─ <span class="pk">msg.isImage()</span>  → handleImage()  → Vision 识图 → 缓存图片 → 发送
+  ├─ <span class="pk">msg.isFile()</span>   → handleFile()   → 多编码读/PdfBox/POI → AI 总结 → 缓存文档
+  └─ <span class="pk">文字消息</span>       → processTextMessage()
+                          │
+                          ├─ ① tryHandleLocalCommand()     <span class="dim">← 帮助/人设/音色/语音模式（零API）</span>
+                          ├─ ② wantsVoice 检测              <span class="dim">← 关键词命中即生效</span>
+                          ├─ ③ buildTools() + chatWithTools() <span class="dim">← 统一FC（一次AI调用）</span>
+                          └─ ④ chat() 自由对话               <span class="dim">← FC未命中时降级</span>
+  </div>
+</section>
+
+<!-- ============ 文件详解 ============ -->
+<section>
+  <h2><span class="icon">📁</span> 文件详解</h2>
+
+  <h3>🔴 入口层</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">bot/BotApp.java</div>
+      <div class="role entry">main() 入口</div>
+      <p>整个程序的大脑。创建所有服务 → 注册消息处理器 → 启动轮询。消息路由全在这里：图片/语音/文件分类处理，文字走 unified FC。还有文件提取（多编码→PDFBox→POI）、TTS 清理、缓存管理等辅助方法。</p>
+    </div>
+  </div>
+
+  <h3>🟡 SDK 门面层</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">ilink/ILinkBot.java</div>
+      <div class="role impl">SDK 门面</div>
+      <p>封装 wechat-ilink-sdk 的全部复杂度。提供：登录（二维码 + 过期重试）、<code>startPolling()</code> 长轮询、sendText/Image/File 等发送方法、WeixinMessage→BotMessage 转换。项目其他地方完全不接触 SDK 类型。</p>
+    </div>
+  </div>
+
+  <h3>🟢 接口层 service/</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">service/AiService.java</div>
+      <div class="role interface">接口</div>
+      <p>AI 对话核心接口。定义 <code>chat()</code> 多轮对话、<code>chatWithTools()</code> 统一 FC、<code>extractXxxIntent()</code> 意图提取（旧版，逐步废弃）、<code>record()</code> 记录对话、<code>setPersona()</code> 人设管理。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">service/ImageGenService.java</div>
+      <div class="role interface">接口</div>
+      <p>生图接口。只有一个方法 <code>byte[] generate(String prompt)</code>。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">service/VisionService.java</div>
+      <div class="role interface">接口</div>
+      <p>识图接口。<code>String analyze(byte[] imageBytes, String prompt)</code>。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">service/SpeechService.java</div>
+      <div class="role interface">接口</div>
+      <p>TTS 接口。<code>textToSpeech()</code> + 音色管理。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">service/WeatherBotService.java</div>
+      <div class="role impl">门面类</div>
+      <p>包装 com.weather 子模块。独立加载配置，提供 <code>query(city)</code> 和 <code>isAvailable()</code>。</p>
+    </div>
+  </div>
+
+  <h3>🔵 实现层 impl/</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">impl/DeepSeekAiServiceImpl.java</div>
+      <div class="role impl">AiService 实现</div>
+      <p>项目最核心的实现类。使用 OpenAI Java SDK 调用 DeepSeek API。实现 <code>chat()</code>（带 Session 历史的多轮对话）、<code>chatWithTools()</code>（统一 FC：注册工具→AI判断→执行→回传结果→最终回复）、<code>quickAsk()</code>（单次 JSON 问答）。依赖 SessionManager 管理多会话。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">impl/SeedreamImageServiceImpl.java</div>
+      <div class="role impl">ImageGenService 实现</div>
+      <p>调用火山引擎 Ark API 生图。模型：doubao-seedream-5-0-pro。流程：提交 prompt → 获取图片 URL → HTTP 下载 → 返回 byte[]。处理内容安全拦截和超时。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">impl/DoubaoVisionServiceImpl.java</div>
+      <div class="role impl">VisionService 实现</div>
+      <p>调用火山引擎 Ark 多模态 API 识图。模型：doubao-seed-2-0-lite。图片 Base64 编码 → 构建 image_url + text 消息 → 返回 AI 描述。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">impl/QwenTtsSpeechServiceImpl.java</div>
+      <div class="role impl">SpeechService 实现</div>
+      <p>调用阿里云 DashScope MultiModalConversation API。模型：qwen3-tts-flash。14 种预设音色（Cherry/Serena/Stella/Ethan/Roy 等），HTTP 下载 WAV 音频返回 byte[]。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">impl/SessionManager.java</div>
+      <div class="role impl">会话管理</div>
+      <p>管理多用户多会话。数据结构：userId → (sessionName → Session)。支持 CRUD + 语音模式开关 + 人设管理。MAX_HISTORY=200 条，system prompt = persona + TECH_INSTRUCTIONS。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">impl/Session.java</div>
+      <div class="role model">数据容器</div>
+      <p>单个会话：name、persona、roles[]+contents[]（并行列表存对话历史）、add()、trim()。</p>
+    </div>
+  </div>
+
+  <h3>🟣 模型层 model/</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">model/BotMessage.java</div>
+      <div class="role model">消息载体</div>
+      <p>统一消息类型。支持 text/image/voice/file 四种模式。ILinkBot 把 SDK 的 WeixinMessage 转成这个，所有 handler 都用它。不可变对象，静态工厂方法创建。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">model/DrawIntent.java</div>
+      <div class="role model">数据类</div>
+      <p>生图意图结果：isDraw + prompt。旧版两段式意图提取用，FC 重构后逐步废弃。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">model/WeatherIntent.java</div>
+      <div class="role model">数据类</div>
+      <p>天气意图结果：isWeather + city。同上，FC 重构后逐步废弃。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">model/ImageFollowUpIntent.java</div>
+      <div class="role model">Record</div>
+      <p>图片追问判断：boolean isFollowUp。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">model/VoiceReplyIntent.java</div>
+      <div class="role model">Record</div>
+      <p>语音回复意愿：boolean isVoiceReply。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">model/SessionCommandIntent.java</div>
+      <div class="role model">Record</div>
+      <p>会话命令：action(create/switch/delete/list/none) + name。</p>
+    </div>
+  </div>
+
+  <h3>⚪ 工具层</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">util/ConfigUtil.java</div>
+      <div class="role util">配置读取</div>
+      <p>三级优先级：系统属性 -D &gt; 环境变量 &gt; config.properties。所有服务实现类通过它读取 API Key。读取不到返回 null，服务初始化时优雅降级。</p>
+    </div>
+  </div>
+
+  <h3>🌤 天气子模块 com.weather/</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">com/weather/WeatherApp.java</div>
+      <div class="role entry">独立 CLI</div>
+      <p>可以单独运行的天气查询命令行程序，不依赖 bot 模块。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">com/weather/service/WeatherService.java</div>
+      <div class="role impl">天气查询</div>
+      <p>两步查询：① Photon 地理编码 API（城市名→经纬度）② 和风天气 API（经纬度→天气数据）。处理 gzip 解压、错误码映射。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">com/weather/model/WeatherData.java</div>
+      <div class="role model">数据类</div>
+      <p>天气数据 + toWeChatFormat()（emoji 美化显示）。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">com/weather/exception/WeatherException.java</div>
+      <div class="role model">异常类</div>
+      <p>天气相关受检异常。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 关键调用链 ============ -->
+<section>
+  <h2><span class="icon">🔗</span> 关键调用链</h2>
+
+  <h4>用户发"北京天气"的完整链路</h4>
+  <div class="call-chain">
+<span class="dim">微信 App</span>
+  │  发送 "北京天气"
+  <span class="dim">▼</span>
+<span class="hl">ILinkBot</span>  getUpdates() 长轮询返回 WeixinMessage
+  │  toBotMessage() → BotMessage(text)
+  <span class="dim">▼</span>
+<span class="yl">BotApp handler</span>  msg.isImage()? isVoice()? isFile()? → 都不是
+  │  调用 <span class="gr">processTextMessage()</span>
+  <span class="dim">▼</span>
+<span class="gr">tryHandleLocalCommand()</span>  "北京天气" 不是"帮助"/"人设"/... → 跳过
+  <span class="dim">▼</span>
+<span class="gr">buildTools()</span>  构造 [get_weather, create_session, switch_session, ...]
+  <span class="dim">▼</span>
+<span class="pk">ai.chatWithTools()</span>
+  │  DeepSeekAiServiceImpl:
+  │  ① 把 8 个 tool 注册到 builder
+  │  ② builder.model(MODEL).build() → API 调用
+  │  ③ AI 返回: tool_calls = [{function: {name: "get_weather", arguments: {city: "北京"}}}]
+  │  ④ 从 executors Map 取 "get_weather" → executor.apply({city:"北京"})
+  │  ⑤ WeatherBotService.query("北京")
+  │       → Photon API 地理编码 → 北京 lat=39.9 lon=116.4
+  │       → 和风天气 API → {temp:25, feelsLike:26, text:"晴", ...}
+  │       → toWeChatFormat() → "🌤 北京 晴 25°C ..."
+  │  ⑥ 构造 followUp 请求，把天气结果作为 tool_result 发回 AI
+  │  ⑦ AI 返回: "北京今天晴天，温度 25°C，适合出行～"
+  <span class="dim">▼</span>
+<span class="yl">BotApp</span>  收到 reply = "北京今天晴天..."
+  │  bot.sendTextWithTyping(userId, reply, 500L)
+  │  voiceMode? → sendAsVoice() → TTS → 发音频文件
+  </div>
+
+  <h4>用户发图片的完整链路</h4>
+  <div class="call-chain">
+<span class="dim">微信 App</span>
+  │  发送一张图片
+  <span class="dim">▼</span>
+<span class="hl">ILinkBot</span>  WeixinMessage → item.getImage_item() → downloadImageFromMessageItem()
+  │  toBotMessage() → BotMessage.image(userId, bytes, caption)
+  <span class="dim">▼</span>
+<span class="yl">BotApp handler</span>  msg.isImage() == true
+  │  调用 <span class="gr">handleImage(bot, ai, vision, msg)</span>
+  <span class="dim">▼</span>
+<span class="pk">DoubaoVisionServiceImpl.analyze()</span>
+  │  图片 Base64 编码 → data:image/jpeg;base64,...
+  │  Ark API 多模态请求: [image_url, text:"请描述这张图片"]
+  │  返回: "这是一张照片，画面中有一只橘猫..."
+  <span class="dim">▼</span>
+<span class="yl">BotApp</span>
+  │  LAST_IMAGE.put(userId, CachedImage(bytes))  ← 缓存，5min，支持追问
+  │  ai.record(userId, "[图片]", result)           ← 写入对话历史
+  │  bot.sendTextWithTyping(userId, result)        ← 发送
+  </div>
+</section>
+
+<!-- ============ 线程模型 ============ -->
+<section>
+  <h2><span class="icon">🧵</span> 线程模型</h2>
+  <table>
+    <tr><th>线程</th><th>作用</th><th>关键代码</th></tr>
+    <tr>
+      <td style="color:#6c8cff">ilink-poller</td>
+      <td>长轮询线程。阻塞在 client.getUpdates()，有消息就提交到 handlerExecutor</td>
+      <td style="font-size:0.82em">ILinkBot.startPolling()</td>
+    </tr>
+    <tr>
+      <td style="color:#4ade80">msg-handler</td>
+      <td>单线程消息处理器。保证消息按序处理，不会两条消息同时改同一个 Session</td>
+      <td style="font-size:0.82em">ILinkBot.handlerExecutor</td>
+    </tr>
+    <tr>
+      <td style="color:#f59e0b">image-gen</td>
+      <td>生图专用线程池。生图耗时长(10~30s)，放在后台不阻塞消息处理</td>
+      <td style="font-size:0.82em">BotApp.IMAGE_EXECUTOR</td>
+    </tr>
+    <tr>
+      <td style="color:#f472b6">main</td>
+      <td>主线程。启动后阻塞在 Thread.currentThread().join()，等待 JVM 退出</td>
+      <td style="font-size:0.82em">BotApp.main()</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ============ 依赖关系图 ============ -->
+<section>
+  <h2><span class="icon">📦</span> 外部依赖</h2>
+  <table>
+    <tr><th>依赖</th><th>版本</th><th>用途</th></tr>
+    <tr><td>wechat-ilink-sdk</td><td>2.3.3</td><td>微信机器人核心 SDK</td></tr>
+    <tr><td>openai-java</td><td>4.27.0</td><td>OpenAI SDK → 调 DeepSeek API（兼容格式）</td></tr>
+    <tr><td>volcengine-java-sdk-ark-runtime</td><td>2.0.19</td><td>火山引擎 Ark → 生图 + 识图</td></tr>
+    <tr><td>dashscope-sdk-java</td><td>2.22.7</td><td>阿里云百炼 → TTS 语音合成</td></tr>
+    <tr><td>pdfbox</td><td>3.0.4</td><td>PDF 文件文本提取</td></tr>
+    <tr><td>poi-ooxml</td><td>5.4.0</td><td>Word/Excel 文件文本提取</td></tr>
+    <tr><td>gson</td><td>2.10.1</td><td>JSON 解析（意图结果、天气数据）</td></tr>
+  </table>
+</section>
+
+<!-- ============ 配置 ============ -->
+<section>
+  <h2><span class="icon">⚙</span> 配置体系</h2>
+  <div class="card-grid">
+    <div class="card">
+      <div class="file-path">config.properties</div>
+      <p>6 个配置项，全部可选（除 DeepSeek 必需）。<br>.gitignore 排除此文件，不提交到仓库。</p>
+    </div>
+    <div class="card">
+      <div class="file-path">ConfigUtil.get(key, envKey)</div>
+      <p>优先级：-D 参数 &gt; 环境变量 &gt; config.properties。<br>读不到返回 null → 服务初始化时捕获异常 → 设为 null → 功能自动禁用。</p>
+    </div>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
