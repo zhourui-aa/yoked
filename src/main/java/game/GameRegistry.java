@@ -3,6 +3,8 @@ package game;
 import game.impl.TurtleSoupEngine;
 import game.impl.UndercoverEngine;
 import game.impl.WerewolfEngine;
+import game.impl.LifeSimEngine;
+import game.impl.CodeBreakerEngine;
 import org.example.bot.service.AiService;
 
 import java.util.*;
@@ -21,6 +23,8 @@ public class GameRegistry {
         register(new WerewolfEngine());
         register(new TurtleSoupEngine());
         register(new UndercoverEngine());
+        register(new LifeSimEngine());
+        register(new CodeBreakerEngine());
     }
 
     // ==================== 引擎 ====================
@@ -48,8 +52,8 @@ public class GameRegistry {
     public static boolean hasLobby() { return lobby != null; }
     public static GameLobby lobby() { return lobby; }
 
-    public static void createLobby(GameEngine engine, int slots, String creatorId) {
-        lobby = new GameLobby(engine, slots, creatorId);
+    public static void createLobby(GameEngine engine, int slots, String creatorId, String creatorBotName) {
+        lobby = new GameLobby(engine, slots, creatorId, creatorBotName);
     }
 
     public static void dismissLobby() { lobby = null; }
@@ -71,13 +75,15 @@ public class GameRegistry {
         public final GameEngine engine;
         public final int slots;
         public final String creatorId;
+        public final String creatorBotName;
         private final Map<String, String> bound = new LinkedHashMap<>();   // 昵称 → userId（已扫码）
         private final LinkedHashSet<String> pending = new LinkedHashSet<>(); // 待扫码的昵称
 
-        GameLobby(GameEngine engine, int slots, String creatorId) {
+        GameLobby(GameEngine engine, int slots, String creatorId, String creatorBotName) {
             this.engine = engine;
             this.slots = slots;
             this.creatorId = creatorId;
+            this.creatorBotName = creatorBotName;
         }
 
         /** 预订一个位置，玩家待扫码 */
@@ -113,6 +119,8 @@ public class GameRegistry {
         public Set<String> nicknames() { return new LinkedHashSet<>(bound.keySet()); }
 
         public boolean pendingContains(String name) { return pending.contains(name); }
+        /** 所有待扫码的昵称（用于清理时关闭对应 bot） */
+        public Set<String> pendingNames() { return new LinkedHashSet<>(pending); }
         public String[] toPlayerNames() { return bound.keySet().toArray(new String[0]); }
         public Map<String, String> boundMap() { return Collections.unmodifiableMap(bound); }
 

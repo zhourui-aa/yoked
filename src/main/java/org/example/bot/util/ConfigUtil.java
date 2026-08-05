@@ -17,6 +17,27 @@ public final class ConfigUtil {
 
     private ConfigUtil() {}
 
+    /** 缓存 config.properties，避免每次 get() 都读盘 */
+    private static volatile Properties cachedProps;
+    private static volatile boolean propsLoaded;
+
+    private static Properties loadProps() {
+        if (propsLoaded) return cachedProps;
+        synchronized (ConfigUtil.class) {
+            if (propsLoaded) return cachedProps;
+            Path configPath = Paths.get("config.properties");
+            if (Files.exists(configPath)) {
+                Properties props = new Properties();
+                try (InputStream in = Files.newInputStream(configPath)) {
+                    props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+                    cachedProps = props;
+                } catch (Exception ignored) {}
+            }
+            propsLoaded = true;
+            return cachedProps;
+        }
+    }
+
     /**
      * 读取配置值。
      *
@@ -44,17 +65,12 @@ public final class ConfigUtil {
             return value.strip();
         }
 
-        // 3. config.properties
-        Path configPath = Paths.get("config.properties");
-        if (Files.exists(configPath)) {
-            Properties props = new Properties();
-            try (InputStream in = Files.newInputStream(configPath)) {
-                props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
-                value = props.getProperty(propertyKey);
-                if (value != null && !value.isBlank()) {
-                    return value.strip();
-                }
-            } catch (Exception ignored) {
+        // 3. config.properties（缓存读取，避免每次读盘）
+        Properties props = loadProps();
+        if (props != null) {
+            value = props.getProperty(propertyKey);
+            if (value != null && !value.isBlank()) {
+                return value.strip();
             }
         }
 

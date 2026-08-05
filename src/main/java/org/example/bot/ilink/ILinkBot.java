@@ -171,12 +171,20 @@ public class ILinkBot {
     }
 
     // ---- 发送 ----
-    /** 发送消息，失败快速重试1次 */
+    /** 发送消息，失败重试1次+指数退避2次，共3次尝试 */
     public void sendText(String userId, String text) {
-        try { client.sendText(userId, text); return; }
-        catch (Exception e1) {
-            try { Thread.sleep(100); client.sendText(userId, text); }
-            catch (Exception e2) { /* 2次都失败，放弃 */ }
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                client.sendText(userId, text);
+                return;
+            } catch (Exception e) {
+                if (attempt < 2) {
+                    try { Thread.sleep(100L * (attempt + 1)); } catch (InterruptedException ignored) {}
+                } else {
+                    System.err.println("[iLink:" + name + "] ❌ sendText 3次失败，消息丢失: userId="
+                        + userId + " text=" + text.substring(0, Math.min(40, text.length())) + "…");
+                }
+            }
         }
     }
 

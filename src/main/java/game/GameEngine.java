@@ -49,6 +49,12 @@ public interface GameEngine {
      */
     default String stateContext() { return ""; }
 
+    /** 当前是否夜晚阶段（夜晚消息不广播，只送AI） */
+    default boolean isNight() { return false; }
+
+    /** 玩家是否存活（默认存活，狼人杀等游戏可覆写） */
+    default boolean isPlayerAlive(String playerName) { return true; }
+
     /** 游戏是否结束 */
     boolean isOver();
 }

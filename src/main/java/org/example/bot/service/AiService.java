@@ -40,4 +40,7 @@ public interface AiService {
 
     /** 修改当前会话的人设 */
     void setPersona(String userId, String persona);
+
+    /** 清除指定用户的会话历史（默认空操作） */
+    default void clearSession(String userId) {}
 }

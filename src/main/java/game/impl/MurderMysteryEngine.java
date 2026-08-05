@@ -19,10 +19,12 @@ public class MurderMysteryEngine implements GameEngine {
     private Phase phase = Phase.BRIEFING;
     private final Map<String, Integer> searchCounts = new HashMap<>();
     private final Map<String, String> votes = new LinkedHashMap<>();
+    private final Set<String> deadPlayers = new HashSet<>();
     private int voteRound;
     private boolean over;
 
     @Override public String name() { return "剧本杀"; }
+    @Override public boolean isPlayerAlive(String playerName) { return !deadPlayers.contains(playerName); }
     @Override public int minPlayers() { return 4; }
     @Override public int maxPlayers() { return 9; }
 
@@ -156,6 +158,21 @@ public class MurderMysteryEngine implements GameEngine {
     @Override
     public String handle(GameSession session, String userId, String text) {
         String name = session.playerName(userId);
+
+        // 从 AI 公告中检测死者身份（只在初始阶段，避免重复解析）
+        if (phase == Phase.BRIEFING && text != null && text.length() > 50
+            && (text.contains("死者") || text.contains("被害") || text.contains("尸体")
+                || text.contains("被杀") || text.contains("身亡") || text.contains("遇害"))) {
+            for (String pn : session.playerNames()) {
+                if (text.contains(pn) && (text.contains(pn + "被") || text.contains(pn + "的")
+                    || text.contains("死者") && text.indexOf(pn) > text.indexOf("死者"))) {
+                    deadPlayers.add(pn);
+                    System.out.println("[剧本杀] 死者检测: " + pn);
+                    break;
+                }
+            }
+        }
+
         if (name == null) return null;
 
         // 搜证
@@ -187,7 +204,9 @@ public class MurderMysteryEngine implements GameEngine {
                 String target = extractTarget(text, session);
                 if (target != null && !target.equals(name)) {
                     votes.put(name, target);
-                    if (votes.size() >= session.playerNames().size()) {
+                    long aliveCount = session.playerNames().stream()
+                        .filter(n -> !deadPlayers.contains(n)).count();
+                    if (votes.size() >= aliveCount) {
                         phase = Phase.REVEAL;
                         over = true;
                         // 让 AI 揭晓真相
@@ -209,7 +228,7 @@ public class MurderMysteryEngine implements GameEngine {
                             return "🎯 所有人已投票！游戏结束，真相只有一个...";
                         }
                     }
-                    return "✅ " + name + " 投 " + target + "，剩余 " + (session.playerNames().size() - votes.size()) + " 人待投。";
+                    return "✅ " + name + " 投 " + target + "，剩余 " + (aliveCount - votes.size()) + " 人待投。";
                 }
                 return null;
             }

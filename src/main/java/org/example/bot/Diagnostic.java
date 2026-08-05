@@ -34,7 +34,7 @@ public class Diagnostic {
         System.out.println("\n--- 3. DeepSeek AI 服务 ---");
         try {
             DeepSeekAiServiceImpl ai = new DeepSeekAiServiceImpl(
-                "你是一个测试助手。", "只回复OK", null);
+                "你是一个测试助手。", "只回复OK");
             System.out.println("  ✅ 创建成功");
             try {
                 String reply = ai.chat("test", "回复OK");
@@ -49,7 +49,7 @@ public class Diagnostic {
         // 4. 天气服务
         System.out.println("\n--- 4. 天气服务 ---");
         try {
-            WeatherBotService weather = WeatherBotService.create();
+            WeatherServiceImpl weather = WeatherServiceImpl.create();
             if (weather != null) {
                 System.out.println("  ✅ 创建成功");
                 String result = weather.query("北京");
