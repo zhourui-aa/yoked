@@ -51,7 +51,7 @@ WeatherServiceImpl {
             System.out.println("[天气] ⚠ 未配置");
             return null;
         }
-        System.out.println("[天气] ✅ 已就绪（Host: " + host + "）");
+        System.out.println("[天气] ✅ 已就绪（Host: " + host + ", Key: " + key.substring(0,8) + "***）");
         return new WeatherServiceImpl(key.strip(), host.strip());
     }
 
@@ -72,9 +72,11 @@ WeatherServiceImpl {
                     optString(now, "windDir", "未知"),
                     optString(now, "windSpeed", "--"));
         } catch (WeatherException e) {
+            System.err.println("[天气] ❌ " + e.getMessage());
             return "天气查询失败：" + e.getMessage();
         } catch (Exception e) {
             System.err.println("[天气] ❌ " + e.getMessage());
+            e.printStackTrace();
             return "天气服务暂时不可用。";
         }
     }
@@ -106,12 +108,17 @@ WeatherServiceImpl {
                 + URLEncoder.encode(loc, StandardCharsets.UTF_8) + "&key="
                 + URLEncoder.encode(apiKey, StandardCharsets.UTF_8);
         JsonObject root = httpGet(url);
+        // 先检查 error 格式的响应
+        if (root.has("error")) {
+            JsonObject err = root.getAsJsonObject("error");
+            throw new WeatherException("API错误(" + optString(err, "status", "?") + "): " + optString(err, "title", "未知"));
+        }
         String code = optString(root, "code", "200");
         if (!"200".equals(code))
             throw new WeatherException("API错误(code=" + code + ")");
         JsonObject now = root.getAsJsonObject("now");
         if (now == null || now.isEmpty())
-            throw new WeatherException("未获取到天气数据。");
+            throw new WeatherException("未获取到天气数据，完整响应见上方日志");
         return now;
     }
 

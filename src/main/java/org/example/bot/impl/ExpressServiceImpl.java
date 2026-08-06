@@ -58,7 +58,7 @@ public class ExpressServiceImpl implements ExpressService {
         this.appKey = key.strip();
         String rt = ConfigUtil.get("kdniao.request.type", "KDNIAO_REQUEST_TYPE");
         this.requestType = (rt != null && !rt.isBlank()) ? rt.strip() : DEFAULT_REQUEST_TYPE;
-        System.out.println("[快递] 快递查询服务已就绪");
+        System.out.println("[快递] 已就绪 ID=[" + ebusinessId + "] Key长度=" + appKey.length() + " 请求类型=" + requestType);
     }
 
     @Override
@@ -70,18 +70,23 @@ public class ExpressServiceImpl implements ExpressService {
 
         try {
             String shipperCode = resolveCompanyCode(company);
+            System.out.println("[快递] 单号=" + num + " 公司=" + company + " → " + shipperCode);
             if (shipperCode == null) {
+                System.out.println("[快递] 自动识别快递公司...");
                 shipperCode = autoDetectCompany(num);
+                System.out.println("[快递] 自动识别结果: " + shipperCode);
             }
             if (shipperCode == null || shipperCode.isBlank()) {
                 return "无法识别快递公司，请补充说明，例如：顺丰、圆通、中通。";
             }
 
+            System.out.println("[快递] 查询轨迹: " + shipperCode + " " + num);
             String json = queryTrack(shipperCode, num, phone);
-            System.out.println("[快递] API 返回: " + (json.length() > 200 ? json.substring(0, 200) + "..." : json));
+            System.out.println("[快递] API返回: " + (json.length() > 300 ? json.substring(0, 300) + "..." : json));
             return formatResponse(json, shipperCode, num);
         } catch (Exception e) {
             System.err.println("[快递] 查询异常: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            e.printStackTrace();
             return "快递查询失败：" + e.getMessage();
         }
     }
@@ -164,6 +169,9 @@ public class ExpressServiceImpl implements ExpressService {
                 + "&RequestData=" + encodedRequestData
                 + "&DataSign=" + dataSign
                 + "&DataType=2";
+
+        System.out.println("[快递] 请求URL: " + API_URL);
+        System.out.println("[快递] 请求体: " + body);
 
         HttpURLConnection conn = (HttpURLConnection) new URL(API_URL).openConnection();
         conn.setConnectTimeout(8000);
