@@ -4,6 +4,7 @@ import game.impl.TurtleSoupEngine;
 import game.impl.UndercoverEngine;
 import game.impl.WerewolfEngine;
 import game.impl.LifeSimEngine;
+import game.impl.CodeBreakerEngine;
 import org.example.bot.service.AiService;
 
 import java.util.*;
@@ -23,6 +24,7 @@ public class GameRegistry {
         register(new TurtleSoupEngine());
         register(new UndercoverEngine());
         register(new LifeSimEngine());
+        register(new CodeBreakerEngine());
     }
 
     // ==================== 引擎 ====================

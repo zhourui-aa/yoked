@@ -6,6 +6,7 @@ import org.example.bot.ilink.BotCluster;
 import org.example.bot.ilink.ILinkBot;
 import org.example.bot.service.AiService;
 import game.impl.LifeSimEngine;
+import game.impl.CodeBreakerEngine;
 
 /**
  * 桌游命令处理。
@@ -523,6 +524,8 @@ public class GameCommand {
 
         if (engine instanceof LifeSimEngine sim) {
             bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + sim.welcomeMessage());
+        } else if (engine instanceof CodeBreakerEngine cb) {
+            bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + cb.welcomeMessage());
         } else {
             String reply = session.prompt(announce);
             bot.sendText(userId, "🎮 「" + engine.name() + "」开始！\n\n" + reply);
