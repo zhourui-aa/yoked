@@ -54,17 +54,26 @@ public class UndercoverEngine implements GameEngine {
 
     /** 从 AI 回复中解析淘汰通知，更新存活状态 */
     private void parseAiAnnouncement(String text, GameSession s) {
-        // 检测胜负判定
-        if (text.contains("平民获胜") || text.contains("卧底获胜")) {
+        // 检测胜负判定 — 只在 AI 主持人语境下生效，避免玩家发言误触终局
+        boolean hostContext = text.startsWith("[主持人]") || text.startsWith("主持人")
+            || text.contains("获胜") || text.contains("淘汰") || text.contains("出局")
+            || text.contains("本轮") || text.contains("投票");
+        if (hostContext && (text.contains("平民获胜") || text.contains("卧底获胜"))) {
             over = true;
             return;
         }
-        // 检测淘汰：AI 通常会宣布 "xxx 被投票淘汰" 或 "xxx 的身份是yyy"
+        // 检测淘汰：AI 主持人公布「xxx被淘汰」等明确句式。
+        // 收紧匹配，避免玩家自己的发言（含"淘汰/出局"字眼）被误判为淘汰公告。
         for (String name : s.playerNames()) {
             if (dead.contains(name)) continue;
-            if (text.contains(name + "被") || text.contains(name + " 被")
-                || text.contains("淘汰" + name) || text.contains("投出" + name)
-                || (text.contains(name) && (text.contains("出局") || text.contains("淘汰")))) {
+            boolean announced = text.contains(name + "被淘汰") || text.contains(name + " 被淘汰")
+                || text.contains(name + "被投出") || text.contains(name + " 被投出")
+                || text.contains("淘汰了" + name) || text.contains("淘汰" + name + "出局")
+                || text.contains("投出" + name) || text.contains(name + "出局")
+                // 单独说「xx淘汰」且带主持人前缀时也认
+                || ((text.startsWith("[主持人]") || text.startsWith("主持人"))
+                    && (text.contains("淘汰" + name) || text.contains(name + "淘汰")));
+            if (announced) {
                 dead.add(name);
                 // 更新卧底计数
                 if ("卧底".equals(s.playerRole(name))) undercoverCount--;
@@ -122,6 +131,8 @@ public class UndercoverEngine implements GameEngine {
     public String start(GameSession session) {
         wordByPlayer.clear();
         roleByPlayer.clear();
+        dead.clear();
+        over = false;
 
         /* ── 1. 抽词 ── */
         Random rand = new Random();

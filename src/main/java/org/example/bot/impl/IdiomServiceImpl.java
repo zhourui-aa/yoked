@@ -3,6 +3,7 @@ package org.example.bot.impl;
 import org.example.bot.service.IdiomService;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 成语接龙游戏实现 — 机器人当裁判并参与游戏。
@@ -15,8 +16,8 @@ public class IdiomServiceImpl implements IdiomService {
     /** 按首字索引的成语词典 */
     private static final Map<Character, List<String>> DICT = buildDictionary();
 
-    /** 每用户一局游戏的状态 */
-    private final Map<String, GameState> games = new HashMap<>();
+    /** 每用户一局游戏的状态 — ConcurrentHashMap 保证多 Bot 并发安全 */
+    private final Map<String, GameState> games = new ConcurrentHashMap<>();
 
     private final Random random = new Random();
 

@@ -73,12 +73,12 @@ public class BotState {
         newsCache.put(userId, new CacheEntry<>(items, System.currentTimeMillis()));
     }
 
-    /** @return 新闻条目列表，不存在或已过期返回 {@code null} */
+    /** @return 新闻条目列表（防御性拷贝），不存在或已过期返回 {@code null} */
     public List<NewsService.NewsItem> getNews(String userId) {
         CacheEntry<List<NewsService.NewsItem>> e = newsCache.get(userId);
         if (e == null) return null;
         if (e.expired()) { newsCache.remove(userId); return null; }
-        return e.value();
+        return new java.util.ArrayList<>(e.value());
     }
 
     public boolean isNewsAvailable(String userId) {

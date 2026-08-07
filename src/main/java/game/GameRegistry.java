@@ -5,6 +5,7 @@ import game.impl.UndercoverEngine;
 import game.impl.WerewolfEngine;
 import game.impl.LifeSimEngine;
 import game.impl.CodeBreakerEngine;
+import game.impl.MurderMysteryEngine;
 import org.example.bot.service.AiService;
 
 import java.util.*;
@@ -25,6 +26,7 @@ public class GameRegistry {
         register(new UndercoverEngine());
         register(new LifeSimEngine());
         register(new CodeBreakerEngine());
+        register(new MurderMysteryEngine());
     }
 
     // ==================== 引擎 ====================

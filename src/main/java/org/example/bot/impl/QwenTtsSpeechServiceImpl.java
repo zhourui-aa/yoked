@@ -109,6 +109,8 @@ public class QwenTtsSpeechServiceImpl implements SpeechService {
         try {
             return AudioParameters.Voice.valueOf(v.toUpperCase());
         } catch (IllegalArgumentException e) {
+            // 只回退到 Cherry，但保留日志便于排查音色映射问题
+            System.err.println("[TTS] ⚠ 未知音色枚举: " + v + "，回退到 Cherry");
             return AudioParameters.Voice.CHERRY;
         }
     }

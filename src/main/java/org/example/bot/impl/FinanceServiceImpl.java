@@ -217,6 +217,9 @@ public class FinanceServiceImpl implements FinanceService {
         conn.setRequestMethod("GET");
         conn.setConnectTimeout(5000);
         conn.setReadTimeout(10000);
+        // 新浪 hq.sinajs.cn 自 2021 年起强制要求 Referer，缺失返回 HTTP 403
+        conn.setRequestProperty("Referer", "https://finance.sina.com.cn/");
+        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {

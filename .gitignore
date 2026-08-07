@@ -39,3 +39,5 @@
 *.class
 .DS_Store
 ._*
+# 运行时数据库（含用户数据，不提交）
+/src/main/java/db/*.db

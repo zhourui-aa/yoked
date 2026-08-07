@@ -31,9 +31,11 @@ public final class ConfigUtil {
                 try (InputStream in = Files.newInputStream(configPath)) {
                     props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
                     cachedProps = props;
-                } catch (Exception ignored) {}
+                    propsLoaded = true; // 仅在成功加载后标记，避免负缓存
+                } catch (Exception e) {
+                    System.err.println("[Config] 读取 config.properties 失败: " + e.getMessage());
+                }
             }
-            propsLoaded = true;
             return cachedProps;
         }
     }

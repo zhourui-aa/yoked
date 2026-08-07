@@ -43,4 +43,12 @@ public interface AiService {
 
     /** 清除指定用户的会话历史（默认空操作） */
     default void clearSession(String userId) {}
+
+    /**
+     * 无状态对话 — 不写入会话历史、不落库。
+     * 用于工具内部的辅助 AI 调用（如网页摘要），避免污染真实对话上下文。
+     */
+    default String chatDetached(String userId, String userMessage) {
+        return chat(userId, userMessage);
+    }
 }

@@ -51,7 +51,8 @@ WeatherServiceImpl {
             System.out.println("[天气] ⚠ 未配置");
             return null;
         }
-        System.out.println("[天气] ✅ 已就绪（Host: " + host + ", Key: " + key.substring(0,8) + "***）");
+        System.out.println("[天气] ✅ 已就绪（Host: " + host + ", Key: "
+            + key.substring(0, Math.min(8, key.length())) + "***）");
         return new WeatherServiceImpl(key.strip(), host.strip());
     }
 
@@ -89,8 +90,15 @@ WeatherServiceImpl {
         JsonArray features = root.getAsJsonArray("features");
         if (features == null || features.isEmpty())
             throw new WeatherException("找不到城市 \"" + city + "\"。");
-        JsonObject props = features.get(0).getAsJsonObject().getAsJsonObject("properties");
-        JsonArray coords = features.get(0).getAsJsonObject().getAsJsonObject("geometry").getAsJsonArray("coordinates");
+        JsonObject first = features.get(0).getAsJsonObject();
+        JsonObject props = first.has("properties") && !first.get("properties").isJsonNull()
+            ? first.getAsJsonObject("properties") : new JsonObject();
+        JsonObject geometry = first.has("geometry") && !first.get("geometry").isJsonNull()
+            ? first.getAsJsonObject("geometry") : null;
+        JsonArray coords = geometry != null && geometry.has("coordinates") && geometry.get("coordinates").isJsonArray()
+            ? geometry.getAsJsonArray("coordinates") : null;
+        if (coords == null || coords.size() < 2)
+            throw new WeatherException("地理编码响应缺少坐标信息，请稍后再试。");
         double lon = coords.get(0).getAsDouble();
         double lat = coords.get(1).getAsDouble();
         String name = optString(props, "name", city);

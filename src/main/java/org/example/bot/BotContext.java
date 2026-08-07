@@ -24,7 +24,6 @@ public class BotContext {
     public final NewsService news;
     public final FinanceService finance;
     public final WebReaderService webReader;
-    public final WebSearchService search;
     public final IdiomService idiom;
     public final GarbageService garbage;
     public final DatabaseService db;
@@ -37,7 +36,7 @@ public class BotContext {
                       RandomService random, ExpressService express, FootballService football,
                       DietService diet, WeatherServiceImpl weather, VisionService vision,
                       ImageGenService imageGen, NewsService news, FinanceService finance,
-                      WebReaderService webReader, WebSearchService search,
+                      WebReaderService webReader,
                       IdiomService idiom, GarbageService garbage,
                       DatabaseService db, SchedulerService scheduler,
                       ToolCenter toolCenter, SkillManager skillManager, RAGPipeline ragPipeline) {
@@ -54,7 +53,6 @@ public class BotContext {
         this.news = news;
         this.finance = finance;
         this.webReader = webReader;
-        this.search = search;
         this.idiom = idiom;
         this.garbage = garbage;
         this.db = db;

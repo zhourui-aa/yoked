@@ -1,13 +1,13 @@
 # 微信 AI 聊天机器人
 
-基于 wechat-ilink-sdk 的多模态 AI 微信机器人，支持文字对话、图片生成、图片识别、语音合成、天气查询、联网搜索、新闻获取、足球数据、饮食推荐、金融行情、金融计算、快递查询、音乐搜索、成语接龙、垃圾分类等功能。
+基于 wechat-ilink-sdk 的多模态 AI 微信机器人，支持文字对话、图片生成、图片识别、语音合成、天气查询、原生联网搜索、新闻获取、足球数据、饮食推荐、金融行情、金融计算、快递查询、音乐搜索、成语接龙、垃圾分类、模拟人生桌游等功能。
 
 ## 功能一览
 
 | 功能 | 能力 | 服务商 |
 |------|------|--------|
-| 💬 文字对话 | 多轮对话 + 多会话管理 + Function Calling | DeepSeek |
-| 🌐 联网搜索 | AI 自主上网查实时信息 | SerpAPI（Google） |
+| 💬 文字对话 | 多轮对话 + 多会话管理 + Function Calling | DeepSeek v4-flash |
+| 🌐 原生联网搜索 | 实时信息查询，自动联网并带引用 | DeepSeek 原生联网 |
 | 📖 网页阅读 | 发送链接自动抓取正文并 AI 总结 | 内置 |
 | 🎨 图片生成 | 说"画一只猫"即可 AI 生图 | 火山引擎 Seedream |
 | 👁 图片识别 | 发图秒描述，支持连续追问 | 豆包 Vision |
@@ -25,12 +25,8 @@
 | 🗑 垃圾分类 | 150+ 物品四分类查询 | 内置 |
 | 🎲 随机工具 | 掷骰子/随机数/抽签/抛硬币 | 内置 |
 | 📄 文件总结 | 发 TXT/PDF/Word/Excel 自动总结 | DeepSeek |
-| 🌐 联网搜索 | AI 自主上网查实时信息 | SerpAPI（Google） |
-| 📖 网页阅读 | 发送链接自动抓取正文并 AI 总结 | 内置 |
-| 💹 金融行情 | A股/基金/加密货币实时价格 | 新浪/天天基金/Binance |
-| 🎵 音乐搜索 | 搜歌试听，自动发送音频文件 | NeteaseCloudMusicApi |
-| 🎯 成语接龙 | 机器人陪玩，内置 300+ 成语词典 | 内置 |
-| 🗑 垃圾分类 | 150+ 物品四分类查询 | 内置 |
+| 🎮 模拟人生 | 单人人生模拟：天赋系统 + 事件库 + AI 叙事 | 内置 |
+| 🎭 桌游大厅 | 剧本杀/狼人杀/谁是卧底/海龟汤/密码破译 | 内置 + AI 主持 |
 | 🔄 多会话 | 一个用户多个独立对话 | 内置 |
 | 🤖 多 Bot | 多个微信号同时在线，运行时动态新增 | SDK 多实例 |
 
@@ -46,8 +42,7 @@
 
 | 配置项 | 必需 | 说明 | 获取地址 |
 |--------|------|------|----------|
-| deepseek.api.key | ✅ 必需 | 文字对话核心 | https://platform.deepseek.com/api_keys |
-| serpapi.api.key | ⭕ 可选 | 联网搜索（100次/月免费） | https://serpapi.com/ |
+| deepseek.api.key | ✅ 必需 | 文字对话 + 原生联网搜索 | https://platform.deepseek.com/api_keys |
 | qweather.api.key | ⭕ 可选 | 天气查询 | https://console.qweather.com/ |
 | ark.api.key | ⭕ 可选 | 图片生成 | https://console.volcengine.com/ark/region:ark+cn-beijing/apikey |
 | ark.vision.api.key | ⭕ 可选 | 图片识别 | 同上，需开通豆包 Vision 模型 |
@@ -57,13 +52,14 @@
 | kdniao.app.key | ⭕ 可选 | 快递查询（API Key） | 同上 |
 
 > **没填的可选功能会自动禁用**，不影响核心聊天功能。
+> **联网搜索无需额外 Key**：DeepSeek V4 Flash 原生支持，配好 `deepseek.api.key` 即可用。
 
 ### 3. 配置 API Key
 
 编辑项目根目录的 `config.properties`：
 
 ```properties
-# 必填 — DeepSeek AI 对话
+# 必填 — DeepSeek AI 对话（含原生联网搜索）
 deepseek.api.key=sk-你的deepseek-key
 
 # 可选 — 和风天气
@@ -112,12 +108,15 @@ mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp" -Dbots=3
 | `北京天气` | 查天气 |
 | `画一只猫` | AI 生图 |
 | `最新科技新闻` | 获取新闻 |
+| `2026年有什么大事件` | 原生联网搜索 |
 | `英超积分榜` | 足球排名 |
 | `减脂怎么吃` | 饮食推荐 |
 | `复利计算 本金10万 年利率5% 投资10年` | 金融计算 |
 | `查快递 YT1234567890` | 快递跟踪 |
 | `掷骰子` / `抛硬币` | 随机工具 |
 | `东京现在几点` | 日期时间 |
+| `模拟人生` | 单人人生模拟游戏 |
+| `桌游模式` | 桌游大厅（剧本杀/狼人杀等） |
 | `发语音` | 本次回复带语音 |
 | `开启语音模式` | 之后所有回复带语音 |
 | `设定人设：你是一只猫娘` | 改 AI 人设 |
@@ -131,74 +130,56 @@ mvn compile exec:java -Dexec.mainClass="org.example.bot.BotApp" -Dbots=3
 
 发送图片、PDF、Word、Excel 等文件也会自动识别/总结。
 
+## 桌游玩法
+
+说「桌游模式」进入大厅，支持：
+
+| 游戏 | 人数 | 说明 |
+|------|------|------|
+| 🎭 剧本杀 | 4-9人 | AI 主持人当场生成案件，推理找出真凶 |
+| 🐺 狼人杀 | 6-12人 | 预女猎白体系，屠边规则 |
+| 🕵 谁是卧底 | 4-12人 | 相似词推理，AI 主持 |
+| 🐢 海龟汤 | 多人 | AI 出汤面，玩家提问还原真相 |
+| 🔐 密码破译 | 1人 | 猜 4 位不重复数字密码 |
+
 ## 项目结构
 
 ```
-src/main/java/org/example/bot/
-├── BotApp.java                          # 主程序入口 + 消息路由 + 工具注册
-├── Diagnostic.java                      # 诊断工具
-├── ilink/                               # 微信 SDK 封装
-│   ├── ILinkBot.java                    #   微信 SDK 门面（登录/收/发）
-│   ├── BotMessage.java                  #   消息载体（文字/图片/语音/文件）
-│   └── BotCluster.java                  #   Bot 集群（多微信号管理 + 动态新增）
-├── service/                             # 服务接口（可插拔）
-│   ├── AiService.java                   #   AI 对话接口
-│   ├── WebSearchService.java            #   联网搜索接口
-│   ├── WebReaderService.java            #   网页读取接口
-│   ├── ImageGenService.java             #   生图接口
-│   ├── VisionService.java               #   识图接口
-│   ├── SpeechService.java               #   语音接口
-│   ├── WeatherBotService.java           #   天气接口
-│   ├── NewsService.java                 #   新闻接口
-│   ├── FootballService.java             #   足球接口
-│   ├── DietService.java                 #   饮食推荐接口
-│   ├── DateTimeService.java             #   日期时间接口
-│   ├── CalculatorService.java           #   金融计算接口
-│   ├── FinanceService.java              #   金融行情接口
-│   ├── MusicService.java                #   音乐搜索接口
-│   ├── IdiomService.java                #   成语接龙接口
-│   ├── GarbageService.java              #   垃圾分类接口
-│   ├── ExpressService.java              #   快递查询接口
-│   └── RandomService.java               #   随机工具接口
-├── impl/                                # 服务实现
-│   ├── DeepSeekAiServiceImpl.java       #   DeepSeek 对话 + Function Calling
-│   ├── WebSearchServiceImpl.java        #   SerpAPI 联网搜索
-│   ├── WebReaderServiceImpl.java        #   网页抓取 + AI 摘要
-│   ├── BotState.java                    #   线程安全缓存（图片/文档/新闻）
-│   ├── SeedreamImageServiceImpl.java    #   火山引擎生图
-│   ├── DoubaoVisionServiceImpl.java     #   豆包识图
-│   ├── QwenTtsSpeechServiceImpl.java    #   阿里云 TTS
-│   ├── RssNewsServiceImpl.java          #   RSS 新闻聚合
-│   ├── FootballServiceImpl.java         #   英超足球数据
-│   ├── DietServiceImpl.java             #   饮食推荐计算
-│   ├── DateTimeServiceImpl.java         #   Kiprio 时区查询
-│   ├── CalculatorServiceImpl.java       #   金融计算
-│   ├── FinanceServiceImpl.java          #   股票/基金/加密货币
-│   ├── MusicServiceImpl.java            #   音乐搜索试听
-│   ├── IdiomServiceImpl.java            #   成语接龙游戏
-│   ├── GarbageServiceImpl.java          #   垃圾分类查询
-│   ├── ExpressServiceImpl.java          #   快递鸟物流查询
-│   ├── RandomServiceImpl.java           #   随机工具
-│   ├── SessionManager.java              #   多会话管理
-│   └── Session.java                     #   会话数据结构
-├── tools/                               # 工具中心（FC 工具注册与管理）
-│   ├── ToolCenter.java                  #   注册中心
-│   ├── ToolDefinition.java              #   工具定义数据类
-│   ├── ToolCondition.java               #   条件判断接口
-│   └── ToolContributor.java             #   服务贡献工具接口
-└── util/
-    └── ConfigUtil.java                  # 配置读取工具
+src/main/java/
+├── org/example/bot/                 # 主程序
+│   ├── BotApp.java                  # 主入口 + 消息路由 + 工具注册
+│   ├── Diagnostic.java              # 诊断工具
+│   ├── ilink/                       # 微信 SDK 封装（多 bot 管理）
+│   ├── service/                     # 服务接口（可插拔）
+│   ├── impl/                        # 服务实现
+│   ├── tools/                       # 工具中心（FC 工具注册）
+│   ├── skill/                       # Skill 系统
+│   ├── rag/                         # RAG 检索
+│   └── util/                        # 配置读取
+├── game/                            # 桌游引擎
+│   ├── GameRegistry.java            # 游戏注册中心
+│   ├── GameCommand.java             # 游戏命令路由
+│   └── impl/                        # 各游戏引擎
+│       ├── LifeSimEngine.java       #   模拟人生
+│       ├── MurderMysteryEngine.java #   剧本杀
+│       ├── WerewolfEngine.java      #   狼人杀
+│       ├── UndercoverEngine.java    #   谁是卧底
+│       ├── TurtleSoupEngine.java    #   海龟汤
+│       └── CodeBreakerEngine.java   #   密码破译
+└── resources/game/impl/             # 游戏数据
+    ├── events.json                  #   模拟人生事件库
+    └── talents.json                 #   模拟人生天赋库
 ```
 
 ## 技术栈
 
 - **微信 SDK**: wechat-ilink-sdk 2.3.3
-- **AI 对话**: DeepSeek v4-pro（OpenAI SDK 兼容）
+- **AI 对话**: DeepSeek v4-flash（OpenAI SDK 兼容 + 原生联网）
 - **图片生成**: 火山引擎 Seedream 5.0
 - **图片识别**: 火山引擎 Doubao Vision
 - **语音合成**: 阿里云 qwen3-tts-flash（DashScope SDK）
 - **天气数据**: 和风天气 API
-- **联网搜索**: SerpAPI（Google 搜索，100次/月免费）
+- **联网搜索**: DeepSeek V4 Flash 原生联网（无需额外 Key）
 - **网页读取**: JDK HttpClient + HTML 正文提取 + AI 摘要
 - **新闻源**: 中国新闻网 / IT之家（RSS，无需 API Key）
 - **足球数据**: openfootball（GitHub）+ 懂球帝搜索
@@ -209,3 +190,4 @@ src/main/java/org/example/bot/
 - **日期时间**: Kiprio Timezone API（500次/天免费）
 - **文件解析**: Apache PDFBox 3.x + Apache POI 5.x
 - **意图路由**: OpenAI Function Calling（AI 自主选择工具）
+- **数据驱动**: 模拟人生事件/天赋均为 JSON 数据驱动

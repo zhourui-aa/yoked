@@ -139,7 +139,11 @@ public class ExpressServiceImpl implements ExpressService {
         if (shippers.isEmpty()) {
             return null;
         }
-        return shippers.get(0).getAsJsonObject().get("ShipperCode").getAsString();
+        JsonObject first = shippers.get(0).getAsJsonObject();
+        if (first.has("ShipperCode") && !first.get("ShipperCode").isJsonNull()) {
+            return first.get("ShipperCode").getAsString();
+        }
+        return null;
     }
 
     private String queryTrack(String shipperCode, String num, String phone) throws Exception {

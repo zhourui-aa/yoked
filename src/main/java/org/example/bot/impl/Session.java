@@ -17,25 +17,25 @@ class Session {
         this.persona = persona;
     }
 
-    void add(String role, String content) {
+    synchronized void add(String role, String content) {
         roles.add(role);
         contents.add(content);
     }
 
-    void trim(int maxHistory) {
+    synchronized void trim(int maxHistory) {
         while (roles.size() > maxHistory) {
             roles.remove(0);
             contents.remove(0);
         }
     }
 
-    void clear() {
+    synchronized void clear() {
         roles.clear();
         contents.clear();
     }
 
     /** 从数据库批量恢复历史（按时间顺序） */
-    void loadFromDb(List<String[]> history) {
+    synchronized void loadFromDb(List<String[]> history) {
         for (String[] entry : history) {
             roles.add(entry[0]);
             contents.add(entry[1]);

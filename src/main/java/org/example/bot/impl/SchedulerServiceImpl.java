@@ -145,29 +145,36 @@ public class SchedulerServiceImpl implements SchedulerService {
         String[] parts = cron.trim().split("\\s+");
         if (parts.length < 5) return 3600_000;
 
-        Calendar now = Calendar.getInstance();
-        Calendar next = (Calendar) now.clone();
-        next.set(Calendar.SECOND, 0);
-        next.set(Calendar.MILLISECOND, 0);
-
         int targetMin = parseField(parts[0], 0, 59);
         int targetHour = parseField(parts[1], 0, 23);
         int targetDay = parseField(parts[2], 1, 31);
         int targetMonth = parseField(parts[3], 1, 12);
         int targetDow = parseField(parts[4], 0, 6);
 
-        next.set(Calendar.MINUTE, targetMin >= 0 ? targetMin : 0);
-        if (targetHour >= 0) next.set(Calendar.HOUR_OF_DAY, targetHour);
-        if (targetDay >= 0) next.set(Calendar.DAY_OF_MONTH, targetDay);
-        if (targetMonth >= 0) next.set(Calendar.MONTH, targetMonth - 1);
-        if (targetDow >= 0) next.set(Calendar.DAY_OF_WEEK, targetDow + 1);
+        Calendar now = Calendar.getInstance();
+        // 从下一分钟开始逐个候选，找到第一个满足全部字段的时间（处理月/周跨周期推进）
+        Calendar candidate = (Calendar) now.clone();
+        candidate.set(Calendar.SECOND, 0);
+        candidate.set(Calendar.MILLISECOND, 0);
+        candidate.add(Calendar.MINUTE, 1);
 
-        if (!next.after(now)) {
-            if (targetHour >= 0 && targetMin >= 0) next.add(Calendar.DAY_OF_MONTH, 1);
-            else next.add(Calendar.HOUR_OF_DAY, 1);
+        for (int attempt = 0; attempt < 366 * 24 * 60; attempt++) { // 上限一年，防死循环
+            boolean match = true;
+            if (targetMin >= 0 && candidate.get(Calendar.MINUTE) != targetMin) match = false;
+            if (targetHour >= 0 && candidate.get(Calendar.HOUR_OF_DAY) != targetHour) match = false;
+            if (targetDay >= 0 && candidate.get(Calendar.DAY_OF_MONTH) != targetDay) match = false;
+            if (targetMonth >= 0 && candidate.get(Calendar.MONTH) + 1 != targetMonth) match = false;
+            if (targetDow >= 0) {
+                // Calendar.SUNDAY=1 ... SATURDAY=7，cron 0=周日
+                int dow = candidate.get(Calendar.DAY_OF_WEEK) - 1; // 0=周日
+                if (dow != targetDow) match = false;
+            }
+            if (match) {
+                return candidate.getTimeInMillis() - now.getTimeInMillis();
+            }
+            candidate.add(Calendar.MINUTE, 1);
         }
-
-        return next.getTimeInMillis() - now.getTimeInMillis();
+        return 3600_000; // 兜底：一年内找不到则 1 小时后
     }
 
     private static int parseField(String f, int min, int max) {

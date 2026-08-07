@@ -3,6 +3,7 @@ package org.example.bot.impl;
 import org.example.bot.service.MusicService;
 import org.example.bot.util.ConfigUtil;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -148,6 +149,14 @@ public class MusicServiceImpl implements MusicService {
                 .GET()
                 .build();
         HttpResponse<byte[]> resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofByteArray());
-        return resp.body();
+        if (resp.statusCode() != 200) {
+            throw new IOException("下载失败，HTTP 状态码：" + resp.statusCode());
+        }
+        byte[] body = resp.body();
+        // 限制单曲大小（20MB），防止坏 URL 撑爆内存
+        if (body.length > 20 * 1024 * 1024) {
+            throw new IOException("音频文件过大（超过 20MB），已中止下载。");
+        }
+        return body;
     }
 }

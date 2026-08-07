@@ -57,6 +57,8 @@ public class CalculatorServiceImpl implements CalculatorService {
 
     @Override
     public String mortgage(double loanAmount, double annualRate, int years, String method) {
+        if (years <= 0) return "❌ 贷款年限必须大于 0 年。";
+        if (loanAmount <= 0) return "❌ 贷款金额必须大于 0。";
         BigDecimal loan = BigDecimal.valueOf(loanAmount);
         BigDecimal rate = BigDecimal.valueOf(annualRate).divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_UP);
         int months = years * 12;

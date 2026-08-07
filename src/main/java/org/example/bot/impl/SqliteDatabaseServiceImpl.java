@@ -310,7 +310,15 @@ public class SqliteDatabaseServiceImpl implements DatabaseService {
     }
 
     private Connection connect() throws SQLException {
-        return DriverManager.getConnection(dbPath);
+        Connection c = DriverManager.getConnection(dbPath);
+        // 启用 WAL + busy_timeout，减少多线程并发写冲突（SQLITE_BUSY）
+        try (var st = c.createStatement()) {
+            st.execute("PRAGMA journal_mode=WAL");
+            st.execute("PRAGMA busy_timeout=5000");
+        } catch (SQLException e) {
+            System.err.println("[数据库] ⚠ 设置 WAL 失败: " + e.getMessage());
+        }
+        return c;
     }
 
     // ThreadLocal：saveChat/loadChats 需要知道当前会话名

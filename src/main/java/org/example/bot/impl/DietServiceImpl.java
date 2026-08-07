@@ -23,6 +23,13 @@ public class DietServiceImpl implements DietService {
 
     @Override
     public String getRecommendation(int heightCm, double weightKg, String goal) {
+        // 合法性校验：避免 height=0/weight=0 导致 NaN/负值输出
+        if (heightCm < 50 || heightCm > 250) {
+            return "❌ 身高参数不合法（50-250cm），请提供正确的身高。";
+        }
+        if (weightKg < 20 || weightKg > 400) {
+            return "❌ 体重参数不合法（20-400kg），请提供正确的体重。";
+        }
         // 解析目标
         boolean isCut = goal.contains("减脂") || goal.contains("减重")
                      || goal.contains("瘦") || goal.contains("刷脂")

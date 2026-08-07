@@ -94,7 +94,11 @@ public class SeedreamImageServiceImpl implements ImageGenService {
             throw new RuntimeException("Seedream 生图失败: " + msg, e);
         }
 
-        String imageUrl = response.getData().get(0).getUrl();
+        var data = response.getData();
+        if (data == null || data.isEmpty() || data.get(0).getUrl() == null) {
+            throw new RuntimeException("Seedream 未返回有效图片数据（响应为空），请稍后重试。");
+        }
+        String imageUrl = data.get(0).getUrl();
         System.out.println("[Seedream] 图片已生成: " + imageUrl);
 
         try {

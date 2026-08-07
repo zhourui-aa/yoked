@@ -205,8 +205,8 @@ public class FootballServiceImpl implements FootballService {
 
     // ==================== 核心：多源数据拉取 + 本地缓存 ====================
 
-    /** 获取比赛数据（内存 → 本地文件 → CDN → GitHub） */
-    private List<Match> getCachedMatches() {
+    /** 获取比赛数据（内存 → 本地文件 → CDN → GitHub）。同步化防止多线程并发重复拉取 */
+    private synchronized List<Match> getCachedMatches() {
         // 1. 内存缓存有效，直接返回
         if (cachedMatches != null && System.currentTimeMillis() - lastFetchTime < CACHE_TTL_MS) {
             return cachedMatches;
@@ -315,15 +315,18 @@ public class FootballServiceImpl implements FootballService {
             JsonElement scoreElem = m.get("score");
             if (scoreElem != null && scoreElem.isJsonObject()) {
                 JsonObject scoreObj = scoreElem.getAsJsonObject();
-                if (scoreObj.has("ft")) {
+                if (scoreObj.has("ft") && scoreObj.get("ft").isJsonArray()) {
                     JsonArray ft = scoreObj.getAsJsonArray("ft");
-                    score1 = ft.get(0).getAsInt();
-                    score2 = ft.get(1).getAsInt();
-                    finished = true;
+                    // 未赛完的场次 ft 可能为空数组，直接跳过
+                    if (ft.size() >= 2 && !ft.get(0).isJsonNull() && !ft.get(1).isJsonNull()) {
+                        score1 = ft.get(0).getAsInt();
+                        score2 = ft.get(1).getAsInt();
+                        finished = true;
+                    }
                 }
             } else if (scoreElem != null && scoreElem.isJsonArray()) {
                 JsonArray arr2 = scoreElem.getAsJsonArray();
-                if (date.isBefore(LocalDate.now()) || date.isEqual(LocalDate.now())) {
+                if (arr2.size() >= 2 && (date.isBefore(LocalDate.now()) || date.isEqual(LocalDate.now()))) {
                     score1 = arr2.get(0).getAsInt();
                     score2 = arr2.get(1).getAsInt();
                     finished = true;

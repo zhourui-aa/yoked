@@ -39,12 +39,13 @@ public class GarbageServiceImpl implements GarbageService {
             if (cat != null) return format(trimmed, cat);
         }
 
-        // 模糊匹配：看物品名包含哪些关键词
+        // 模糊匹配：看物品名包含哪些关键词。
+        // 只认「用户输入包含字典词」，避免短输入被长字典词反向误判
         Category best = null;
         int bestLen = 0;
         for (Map.Entry<String, Category> e : DICT.entrySet()) {
             String key = e.getKey();
-            if (key.length() > bestLen && (name.contains(key) || key.contains(name))) {
+            if (key.length() > bestLen && name.contains(key)) {
                 best = e.getValue();
                 bestLen = key.length();
             }

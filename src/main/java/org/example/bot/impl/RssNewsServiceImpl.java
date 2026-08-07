@@ -179,6 +179,16 @@ public class RssNewsServiceImpl implements NewsService {
             String s = new String(body, charset);
             if (s.contains("<?xml") || s.contains("<rss")) return s;
         } catch (Exception ignored) {}
+        // HTTP 头无 charset 时，解析 XML 声明中的 encoding（如 GBK/GB2312）
+        try {
+            String head = new String(body, 0, Math.min(body.length, 512), StandardCharsets.ISO_8859_1);
+            java.util.regex.Matcher m = Pattern.compile("encoding=[\"']([^\"']+)[\"']").matcher(head);
+            if (m.find()) {
+                try {
+                    return new String(body, Charset.forName(m.group(1).strip()));
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
         return new String(body, StandardCharsets.UTF_8);
     }
 

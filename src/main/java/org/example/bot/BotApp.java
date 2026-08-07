@@ -26,8 +26,6 @@ import org.example.bot.service.FinanceService;
 import org.example.bot.service.WebReaderService;
 import org.example.bot.impl.FinanceServiceImpl;
 import org.example.bot.impl.WebReaderServiceImpl;
-import org.example.bot.service.WebSearchService;
-import org.example.bot.impl.WebSearchServiceImpl;
 import org.example.bot.impl.RssNewsServiceImpl;
 import org.example.bot.impl.FootballServiceImpl;
 import org.example.bot.impl.DietServiceImpl;
@@ -44,6 +42,8 @@ import game.GameEngine;
 import game.GameRegistry;
 import game.GameSession;
 import game.impl.WerewolfEngine;
+import game.impl.LifeSimEngine;
+import game.impl.CodeBreakerEngine;
 import org.example.bot.service.SchedulerService;
 import org.example.bot.impl.SchedulerServiceImpl;
 import org.example.bot.service.DatabaseService;
@@ -68,6 +68,7 @@ import com.google.gson.JsonObject;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -94,7 +95,10 @@ public class BotApp {
         "回复简洁自然，适合朗读。" +
         "你可以查询天气、获取新闻、生成图片、识别图片、总结文件等。" +
         "你可以同时调用多个工具或依次调用工具来满足用户的复杂需求，最终把所有结果整合在一起回复用户。" +
-        "当用户问新闻相关问题时，直接调用 get_news 工具获取真实新闻，不要说你没有联网功能。";
+        "当用户问新闻相关问题时，直接调用 get_news 工具获取真实新闻，不要说你没有联网功能。" +
+        "联网搜索工具 web_search 仅用于查询实时/最新信息（新闻动态、实时价格、最新消息等）。" +
+        "对于常识性、确定性知识，直接回答即可，**不要调用 web_search**。" +
+        "需要最新消息时，优先用 get_news、get_weather、query_stock 等专用工具获取结构化数据，仅当这些工具覆盖不了时再调用 web_search。";
 
     /** 生图专用线程池 — 避免阻塞主消息循环 */
     private static final ExecutorService IMAGE_EXECUTOR =
@@ -210,10 +214,6 @@ public class BotApp {
         WebReaderService webReader = new WebReaderServiceImpl();
         System.out.println("[Bot] 📖 网页读取服务已就绪（文章抓取与摘要）");
 
-        WebSearchService search = null;
-        try { search = new WebSearchServiceImpl(); }
-        catch (IllegalStateException e) { System.out.println("[Bot] ⚠ 联网搜索服务未启用: " + e.getMessage()); }
-
         IdiomService idiom = new IdiomServiceImpl();
         System.out.println("[Bot] 🎯 成语接龙服务已就绪");
 
@@ -224,13 +224,13 @@ public class BotApp {
         System.out.println("[Bot] 🎮 桌游引擎已就绪");
 
         // ---- 向工具中心注册所有 FC 工具 ----
-        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, search, idiom, garbage, db, scheduler);
+        registerAllTools(ai, weather, calc, random, express, football, diet, imageGen, vision, news, finance, webReader, idiom, garbage, db, scheduler);
         System.out.println(toolCenter.summary());
         System.out.println(skillManager.summary());
 
         // 构建服务上下文（消除长参数列表）
         ctx = new BotContext(ai, tts, calc, random, express, football, diet, weather, vision,
-            imageGen, news, finance, webReader, search, idiom, garbage, db, scheduler,
+            imageGen, news, finance, webReader, idiom, garbage, db, scheduler,
             toolCenter, skillManager, ragPipeline);
 
         // 第 3 步：注册消息处理器 — 每条消息到达时直接处理
@@ -255,10 +255,12 @@ public class BotApp {
                 }
             }
 
-            // 大厅中非创建者的已绑定玩家→回复等待状态（创建者放行，需处理"加入"命令）
+            // 大厅中非创建者的已绑定玩家→回复等待状态（创建者放行，需处理"加入"命令）。
+            // 放行退出类命令，允许等待中的玩家退出大厅。
             if (GameRegistry.hasLobby()
                 && !userId.equals(GameRegistry.lobby().creatorId)
-                && GameRegistry.lobby().boundMap().containsValue(userId)) {
+                && GameRegistry.lobby().boundMap().containsValue(userId)
+                && !GameCommand.isQuitCommand(msg.text())) {
                 bot.sendText(userId, "🏠 你已加入游戏，等待开始...");
                 return;
             }
@@ -470,7 +472,7 @@ public class BotApp {
             FootballService football, DietService diet,
             ImageGenService imageGen, VisionService vision,
             NewsService news, FinanceService finance,
-            WebReaderService webReader, WebSearchService search,
+            WebReaderService webReader,
             IdiomService idiom, GarbageService garbage,
             DatabaseService db, SchedulerService scheduler) {
 
@@ -691,7 +693,17 @@ public class BotApp {
             Map.of("name", Map.of("type", "string", "description", "要删除的对话名称")),
             args -> {
                 String name = args.has("name") ? args.get("name").getAsString() : "";
-                return sm.deleteSession(ToolCenter.currentUserId(), name);
+                String uid = ToolCenter.currentUserId();
+                String result = sm.deleteSession(uid, name);
+                // 同步清理真实持久化存储（chat.db），否则被删历史下次消息即复活
+                if (result.startsWith("已删除")) {
+                    try {
+                        ((DeepSeekAiServiceImpl) ai).getChatRepo().deleteSession(uid, name);
+                    } catch (Exception e) {
+                        System.err.println("[AI] 清理 chat.db 会话失败: " + e.getMessage());
+                    }
+                }
+                return result;
             }));
 
         toolCenter.register(new ToolDefinition("list_sessions",
@@ -863,24 +875,21 @@ public class BotApp {
                 return webReader.summarize(url, ai, ToolCenter.currentUserId());
             }));
 
-        // ---- 联网搜索（条件：API Key 已配置）----
-        if (search != null) {
-            toolCenter.register(new ToolDefinition("web_search",
-                "联网搜索互联网获取实时信息。" +
-                "当用户询问的问题超出已有工具（天气/新闻/足球/股票/计算器/快递/饮食等）的覆盖范围时调用此工具。" +
-                "例如：最近发生的新闻事件、名人动态、产品价格、学术知识、百科查询等。" +
-                "搜索结果为 Google 实时结果，包含标题、摘要和链接。" +
-                "**优先级**：如果能用 get_news、get_weather、query_stock 等专用工具满足需求，优先使用专用工具。",
-                Map.of(
-                    "query", Map.of("type", "string", "description", "搜索关键词，用中文或英文"),
-                    "num", Map.of("type", "integer", "description", "返回结果数，默认5，最多10")
-                ),
-                args -> {
-                    String query = args.has("query") ? args.get("query").getAsString() : "";
-                    int num = args.has("num") ? args.get("num").getAsInt() : 5;
-                    return search.search(query, num);
-                }));
-        }
+        // ---- 原生联网搜索（DeepSeek Responses API web_search，无需额外 key）----
+        toolCenter.register(new ToolDefinition("web_search",
+            "联网搜索实时信息。仅当用户明确需要实时/最新数据且专用工具（天气/新闻/足球/股票）覆盖不了时调用。" +
+            "常识性、确定性知识直接回答，绝不调用本工具。",
+            Map.of("query", Map.of("type", "string", "description", "搜索关键词，用中文或英文")),
+            args -> {
+                String query = args.has("query") ? args.get("query").getAsString() : "";
+                // 意图过滤：非实时性查询直接提示，避免 9 秒+ 的联网阻塞拖慢对话
+                if (!isRealtimeQuery(query)) {
+                    return "这个问题属于常识/确定性知识，无需联网搜索，请直接回答。";
+                }
+                return ai instanceof DeepSeekAiServiceImpl
+                    ? ((DeepSeekAiServiceImpl) ai).webSearch(query)
+                    : "联网搜索服务不可用。";
+            }));
 
         // ---- 成语接龙 ----
         toolCenter.register(new ToolDefinition("idiom_chain",
@@ -918,12 +927,16 @@ public class BotApp {
             Map.of("count", Map.of("type", "integer", "description", "显示条数，默认10")),
             args -> {
                 int count = args.has("count") ? args.get("count").getAsInt() : 10;
-                var records = db.loadChats(ToolCenter.currentUserId(), Math.min(count, 50));
-                if (records.isEmpty()) return "当前会话暂无聊天记录。";
-                StringBuilder sb = new StringBuilder("📋 最近 " + records.size() + " 条聊天记录：\n");
-                for (var r : records) {
-                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
-                    String c = r.content().length() > 80 ? r.content().substring(0, 80) + "..." : r.content();
+                String uid = ToolCenter.currentUserId();
+                String sessionName = ((DeepSeekAiServiceImpl) ai).getSessionManager()
+                    .currentSessionName(uid);
+                var history = ((DeepSeekAiServiceImpl) ai).getChatRepo()
+                    .loadHistory(uid, sessionName, Math.min(count, 50));
+                if (history.isEmpty()) return "当前会话暂无聊天记录。";
+                StringBuilder sb = new StringBuilder("📋 最近 " + history.size() + " 条聊天记录：\n");
+                for (String[] r : history) {
+                    sb.append("user".equals(r[0]) ? "👤 " : "🤖 ");
+                    String c = r[1].length() > 80 ? r[1].substring(0, 80) + "..." : r[1];
                     sb.append(c).append("\n");
                 }
                 return sb.toString().strip();
@@ -936,12 +949,21 @@ public class BotApp {
             args -> {
                 String kw = args.has("keyword") ? args.get("keyword").getAsString() : "";
                 if (kw.isBlank()) return "请告诉我你想搜索什么关键词。";
-                var records = db.searchChats(ToolCenter.currentUserId(), kw, 20);
-                if (records.isEmpty()) return "当前会话中没有找到包含「" + kw + "」的聊天记录。";
-                StringBuilder sb = new StringBuilder("🔍 搜索「" + kw + "」（" + records.size() + "条）：\n");
-                for (var r : records) {
-                    sb.append(r.role().equals("user") ? "👤 " : "🤖 ");
-                    sb.append(r.content()).append("\n\n");
+                String uid = ToolCenter.currentUserId();
+                String sessionName = ((DeepSeekAiServiceImpl) ai).getSessionManager()
+                    .currentSessionName(uid);
+                var history = ((DeepSeekAiServiceImpl) ai).getChatRepo()
+                    .loadHistory(uid, sessionName, 200);
+                List<String[]> matched = new java.util.ArrayList<>();
+                for (String[] r : history) {
+                    if (r[1] != null && r[1].contains(kw)) matched.add(r);
+                }
+                if (matched.isEmpty()) return "当前会话中没有找到包含「" + kw + "」的聊天记录。";
+                StringBuilder sb = new StringBuilder("🔍 搜索「" + kw + "」（" + matched.size() + "条）：\n");
+                for (String[] r : matched) {
+                    sb.append("user".equals(r[0]) ? "👤 " : "🤖 ");
+                    String c = r[1].length() > 80 ? r[1].substring(0, 80) + "..." : r[1];
+                    sb.append(c).append("\n\n");
                 }
                 return sb.toString().strip();
             }));
@@ -958,13 +980,13 @@ public class BotApp {
                 if (!"确认".equals(confirm)) {
                     return "⚠ 删除聊天记录不可撤销。请回复「确认」来执行删除。";
                 }
-                int count = db.countChats(ToolCenter.currentUserId());
-                db.clearChats(ToolCenter.currentUserId(),
-                    SqliteDatabaseServiceImpl.CURRENT_SESSION.get() != null
-                        ? SqliteDatabaseServiceImpl.CURRENT_SESSION.get() : "默认");
+                String uid = ToolCenter.currentUserId();
                 var ssnMgr = ((DeepSeekAiServiceImpl) ai).getSessionManager();
-                ssnMgr.clearCurrent(ToolCenter.currentUserId());
-                return "✅ 已清除 " + count + " 条聊天记录。";
+                String sessionName = ssnMgr.currentSessionName(uid);
+                // 清理真实持久化存储（chat.db） + 内存会话
+                ((DeepSeekAiServiceImpl) ai).getChatRepo().deleteSession(uid, sessionName);
+                ssnMgr.clearCurrent(uid);
+                return "✅ 已清除当前会话的全部聊天记录。";
             }));
 
         // ---- 定时任务 ----
@@ -1429,6 +1451,19 @@ public class BotApp {
         return false;
     }
 
+    /** 判断是否为实时性查询（需联网）。非实时性查询直接由模型作答，不触发慢速联网 */
+    private static boolean isRealtimeQuery(String text) {
+        if (text == null || text.isBlank()) return false;
+        String[] realtimeKw = {
+            "最新", "今天", "昨天", "今天早上", "今晚", "最近", "实时", "刚刚",
+            "现在", "当前", "行情", "走势", "新闻", "热点", "头条", "转会",
+            "价格", "多少", "今年", "本月", "本周", "明日", "下周", "2026",
+            "有什么大", "发生了什么", "进展", "动态", "结果", "比分", "赛事",
+            "天气预报", "天气", "股价", "汇率", "基金", "币价"
+        };
+        return containsKeyword(text, realtimeKw);
+    }
+
     private static boolean isVoiceMode(AiService ai, String userId) {
         return ((DeepSeekAiServiceImpl) ai).getSessionManager().isVoiceMode(userId);
     }
@@ -1474,6 +1509,15 @@ public class BotApp {
         GameSession gs = GameRegistry.session();
         if (gs.playerName(userId) == null && !gs.boundUsers().contains(userId)) return false;
 
+        // 游戏进行中：玩家发退出命令 → 直接结束游戏，避免被引擎路由吞掉
+        if (GameCommand.isQuitCommand(text)) {
+            String gn = gs.engine().name();
+            GameRegistry.stop();
+            bot.sendText(userId, "🚪 已退出「" + gn + "」。");
+            System.out.println("[游戏] 玩家退出: " + userId + " → " + gn);
+            return true;
+        }
+
         String speakerName = gs.playerName(userId);
         // 猎人被投出后可以开枪——在死亡检查之前拦截
         if (speakerName != null && gs.engine() instanceof WerewolfEngine we
@@ -1497,6 +1541,17 @@ public class BotApp {
             bot.sendText(userId, "💀 你已死亡，无法发言。请安静观战。");
             return true;
         }
+
+        // 单人游戏（模拟人生/密码破译）——引擎 handle() 直接返回最终文本，
+        // 不走下方多人桌游的「AI 二次处理」链路，避免返回文本被当输入再次喂给 handle()
+        if (gs.engine() instanceof LifeSimEngine || gs.engine() instanceof CodeBreakerEngine) {
+            String singleResult = gs.engine().handle(gs, userId, text);
+            if (singleResult != null) {
+                bot.sendText(userId, singleResult);
+            }
+            return true;
+        }
+
         boolean wasNight = gs.engine().isNight();
 
         // 夜晚发言权限

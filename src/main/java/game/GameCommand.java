@@ -28,7 +28,16 @@ public class GameCommand {
         // ═══════════════════════════════════════════
         if (isQuitCommand(text)) {
             if (GameRegistry.isRunning()) {
-                String gn = GameRegistry.session().engine().name();
+                // 归属校验：仅游戏内玩家（已绑定 userId）可结束游戏
+                GameSession running = GameRegistry.session();
+                boolean isPlayer = running != null
+                    && (running.boundUsers().contains(userId)
+                        || running.getUserId("玩家") != null && running.boundUsers().contains(userId));
+                if (!isPlayer) {
+                    bot.sendText(userId, "❌ 你不在当前游戏中，无法结束游戏。");
+                    return true;
+                }
+                String gn = running != null ? running.engine().name() : "游戏";
                 GameRegistry.stop();
                 bot.sendText(userId, "🚪 已退出「" + gn + "」。");
                 return true;

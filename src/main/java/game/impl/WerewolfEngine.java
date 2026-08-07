@@ -300,6 +300,12 @@ public class WerewolfEngine implements GameEngine {
         if (cmd.equals("救")) {
             if (witchAntidoteUsed) return "❌ 解药已用过。";
             if (wolfKillTarget == null) return "❌ 今晚没有死者，无需使用解药。";
+            // 解药不能自救：若女巫自己就是今晚死者，禁止救自己
+            String witchName = session.playerNames().stream()
+                .filter(n -> "女巫".equals(session.playerRole(n))).findFirst().orElse(null);
+            if (witchName != null && witchName.equals(wolfKillTarget)) {
+                return "❌ 解药不能自救！今晚是你自己被害，无法使用解药。";
+            }
             witchAntidoteUsed = true;
             antidoteUsedThisRound = true;
             System.out.println("[狼人杀] 女巫使用解药，救活 " + wolfKillTarget);
@@ -358,6 +364,13 @@ public class WerewolfEngine implements GameEngine {
             dead.add(poisonTarget);
             if ("猎人".equals(session.playerRole(poisonTarget))) hunterCanShoot = false;
         }
+        // 夜间死亡结算后立即判定胜负（狼人可夜间达成胜利而不结束的 bug）
+        String winCheck = checkWin(session);
+        if (winCheck != null) {
+            wolfKillTarget = null; witchPoisonTarget = null;
+            antidoteUsedThisRound = false;
+            return "🔍 查验结果：" + target + " 是 " + result + "。\n\n☀️ 天亮了！\n\n" + winCheck;
+        }
         // 构造天亮公告（只报今夜死者）
         java.util.List<String> nightDead = new java.util.ArrayList<>();
         if (wolfTarget != null) nightDead.add(wolfTarget);
@@ -379,7 +392,8 @@ public class WerewolfEngine implements GameEngine {
         for (String line : text.split("\n")) {
             line = line.strip();
             // 引擎标签解析
-            if (line.contains("【死者:")) {
+            // 仅夜晚阶段才解析【死者:】击杀标签，白天 AI 幻觉/玩家发言不会触发击杀
+            if (night && line.contains("【死者:")) {
                 String name = extractCmd(line, "【死者:");
                 if (name != null && !dead.contains(name)) {
                     dead.add(name);
@@ -498,18 +512,25 @@ public class WerewolfEngine implements GameEngine {
 
     /** 猎人开枪后的结算：检查胜负，进入黑夜 */
     private String afterHunterShot(GameSession session) {
-        long wolvesAlive = session.playerNames().stream()
-            .filter(n -> !dead.contains(n) && "狼人".equals(session.playerRole(n))).count();
-        long goodsAlive = session.playerNames().stream()
-            .filter(n -> !dead.contains(n) && !"狼人".equals(session.playerRole(n))).count();
-        if (wolvesAlive == 0) { over = true; return "🎉 所有狼人被消灭，好人阵营获胜！"; }
-        if (wolvesAlive >= goodsAlive) { over = true; return "🐺 狼人数量占优，狼人阵营获胜！"; }
+        String win = checkWin(session);
+        if (win != null) { over = true; return win; }
         night = true; round++;
         nightPhase = NightPhase.WOLVES;
         antidoteUsedThisRound = false;
         wolfKillTarget = null; witchPoisonTarget = null;
         wolfProposal = null; wolfProposer = null; wolfAgreed.clear();
         return "🌙 天黑请闭眼。\n🐺 狼人请睁眼。";
+    }
+
+    /** 胜负判定：狼人全灭→好人胜；好人数≤狼人数→狼人胜。未分胜负返回 null */
+    private String checkWin(GameSession session) {
+        long wolvesAlive = session.playerNames().stream()
+            .filter(n -> !dead.contains(n) && "狼人".equals(session.playerRole(n))).count();
+        long goodsAlive = session.playerNames().stream()
+            .filter(n -> !dead.contains(n) && !"狼人".equals(session.playerRole(n))).count();
+        if (wolvesAlive == 0) { over = true; return "🎉 所有狼人被消灭，好人阵营获胜！"; }
+        if (wolvesAlive >= goodsAlive) { over = true; return "🐺 狼人数量占优，狼人阵营获胜！"; }
+        return null;
     }
 
     /** 从文本提取玩家名 */

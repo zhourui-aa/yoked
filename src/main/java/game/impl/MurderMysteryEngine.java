@@ -21,6 +21,8 @@ public class MurderMysteryEngine implements GameEngine {
     private final Map<String, String> votes = new LinkedHashMap<>();
     private final Set<String> deadPlayers = new HashSet<>();
     private int voteRound;
+    /** 投票阶段累计消息数，超阈值强制揭晓（防玩家一直不投卡死） */
+    private int voteMsgCount;
     private boolean over;
 
     @Override public String name() { return "剧本杀"; }
@@ -106,6 +108,14 @@ public class MurderMysteryEngine implements GameEngine {
 
     @Override
     public String start(GameSession session) {
+        // 重置跨局状态，避免上一局残留
+        searchCounts.clear();
+        votes.clear();
+        deadPlayers.clear();
+        voteRound = 0;
+        voteMsgCount = 0;
+        over = false;
+        phase = Phase.BRIEFING;
         for (String n : session.playerNames()) searchCounts.put(n, 0);
         phase = Phase.BRIEFING;
 
@@ -159,13 +169,19 @@ public class MurderMysteryEngine implements GameEngine {
     public String handle(GameSession session, String userId, String text) {
         String name = session.playerName(userId);
 
-        // 从 AI 公告中检测死者身份（只在初始阶段，避免重复解析）
+        // 从 AI 公告中检测死者身份（只在初始阶段，避免重复解析）。
+        // 收紧匹配：只认「死者是X」「X被杀/被害/身亡/遇害」等明确句式，避免把「XX的房间」等误判为死者。
         if (phase == Phase.BRIEFING && text != null && text.length() > 50
             && (text.contains("死者") || text.contains("被害") || text.contains("尸体")
                 || text.contains("被杀") || text.contains("身亡") || text.contains("遇害"))) {
             for (String pn : session.playerNames()) {
-                if (text.contains(pn) && (text.contains(pn + "被") || text.contains(pn + "的")
-                    || text.contains("死者") && text.indexOf(pn) > text.indexOf("死者"))) {
+                boolean killed = text.contains("死者" + pn) || text.contains("死者是" + pn)
+                    || text.contains("死者：" + pn) || text.contains("死者:" + pn)
+                    || text.contains(pn + "被杀") || text.contains(pn + "被杀害")
+                    || text.contains(pn + "被害") || text.contains(pn + "身亡")
+                    || text.contains(pn + "遇害") || text.contains("死者为" + pn)
+                    || text.contains("被害人" + pn);
+                if (killed && !deadPlayers.contains(pn)) {
                     deadPlayers.add(pn);
                     System.out.println("[剧本杀] 死者检测: " + pn);
                     break;
@@ -201,40 +217,48 @@ public class MurderMysteryEngine implements GameEngine {
         // 指认/投票
         if (text.contains("指认") || text.contains("我投票") || text.contains("凶手是")) {
             if (phase == Phase.VOTE) {
+                voteMsgCount++;
                 String target = extractTarget(text, session);
                 if (target != null && !target.equals(name)) {
                     votes.put(name, target);
-                    long aliveCount = session.playerNames().stream()
-                        .filter(n -> !deadPlayers.contains(n)).count();
-                    if (votes.size() >= aliveCount) {
-                        phase = Phase.REVEAL;
-                        over = true;
-                        // 让 AI 揭晓真相
-                        StringBuilder voteSummary = new StringBuilder();
-                        for (var e : votes.entrySet())
-                            voteSummary.append(e.getKey()).append("→").append(e.getValue()).append(" ");
-                        String revealPrompt = "所有人已投票：" + voteSummary.toString().strip()
-                            + "。请公布真相！包括：\n"
-                            + "1. 真凶是谁、杀人动机、作案手法\n"
-                            + "2. 每位玩家的真实身份和隐藏的秘密\n"
-                            + "3. 给每位玩家简短打分+评价\n"
-                            + "用公开文字宣布，涉及具体玩家的秘密可用【私信:玩家名】补充。";
-                        try {
-                            String reveal = session.prompt(revealPrompt);
-                            System.out.println("[游戏:揭示] AI回复 " + (reveal != null ? reveal.length() : 0) + "字符");
-                            return reveal != null ? reveal : "🎯 投票结束！真相已大白。";
-                        } catch (Exception e) {
-                            System.err.println("[游戏:揭示] ❌ " + e.getMessage());
-                            return "🎯 所有人已投票！游戏结束，真相只有一个...";
-                        }
-                    }
-                    return "✅ " + name + " 投 " + target + "，剩余 " + (aliveCount - votes.size()) + " 人待投。";
                 }
-                return null;
+                long aliveCount = session.playerNames().stream()
+                    .filter(n -> !deadPlayers.contains(n)).count();
+                // 超时兜底：投票阶段累计消息超过存活数+5 仍不齐 → 未投者自动弃票，强制揭晓
+                if (votes.size() >= aliveCount || voteMsgCount >= aliveCount + 5) {
+                    if (votes.size() < aliveCount) {
+                        System.out.println("[剧本杀] 投票超时，未投者自动弃票（" + votes.size() + "/" + aliveCount + "）");
+                    }
+                    phase = Phase.REVEAL;
+                    over = true;
+                    // 让 AI 揭晓真相
+                    StringBuilder voteSummary = new StringBuilder();
+                    for (var e : votes.entrySet())
+                        voteSummary.append(e.getKey()).append("→").append(e.getValue()).append(" ");
+                    String revealPrompt = "所有人已投票：" + voteSummary.toString().strip()
+                        + "。请公布真相！包括：\n"
+                        + "1. 真凶是谁、杀人动机、作案手法\n"
+                        + "2. 每位玩家的真实身份和隐藏的秘密\n"
+                        + "3. 给每位玩家简短打分+评价\n"
+                        + "用公开文字宣布，涉及具体玩家的秘密可用【私信:玩家名】补充。";
+                    try {
+                        String reveal = session.prompt(revealPrompt);
+                        System.out.println("[游戏:揭示] AI回复 " + (reveal != null ? reveal.length() : 0) + "字符");
+                        return reveal != null ? reveal : "🎯 投票结束！真相已大白。";
+                    } catch (Exception e) {
+                        System.err.println("[游戏:揭示] ❌ " + e.getMessage());
+                        return "🎯 所有人已投票！游戏结束，真相只有一个...";
+                    }
+                }
+                if (target == null || target.equals(name)) {
+                    return "❌ 投票无效，请说出你怀疑的玩家名（不能投自己）。";
+                }
+                return "✅ " + name + " 投 " + target + "，剩余 " + (aliveCount - votes.size()) + " 人待投。";
             }
             phase = Phase.VOTE;
             voteRound = 1;
             votes.clear();
+            voteMsgCount = 0;
             String target = extractTarget(text, session);
             if (target != null) votes.put(name, target);
             return "🗳 " + name + " 发起指认！进入投票阶段——请每位玩家说出你怀疑的凶手名字。当前 1/" + session.playerNames().size() + " 人已投票。";

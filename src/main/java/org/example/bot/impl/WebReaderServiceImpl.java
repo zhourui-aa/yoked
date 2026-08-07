@@ -65,12 +65,43 @@ public class WebReaderServiceImpl implements WebReaderService {
         if (!isValidUrl(url)) {
             return "❌ 无效的链接格式，请提供完整的 URL（如：https://mp.weixin.qq.com/s/xxx）";
         }
+        if (isPrivateUrl(url)) {
+            return "❌ 不支持访问内网/本地地址。";
+        }
 
         try {
             String html = fetchHtml(url);
             return extractContent(url, html);
         } catch (Exception e) {
             return "❌ 抓取失败：" + e.getMessage();
+        }
+    }
+
+    /** 内网/本地地址拦截（SSRF 防护） */
+    private boolean isPrivateUrl(String url) {
+        try {
+            URI uri = URI.create(url);
+            String host = uri.getHost();
+            if (host == null) return true;
+            String h = host.toLowerCase();
+            // 直接本地地址
+            if ("localhost".equals(h) || h.endsWith(".localhost")) return true;
+            if (h.equals("127.0.0.1") || h.equals("::1") || h.equals("[::1]")) return true;
+            // 内网网段
+            if (h.startsWith("10.") || h.startsWith("192.168.")
+                || h.startsWith("172.16.") || h.startsWith("172.17.")
+                || h.startsWith("172.18.") || h.startsWith("172.19.")
+                || h.startsWith("172.20.") || h.startsWith("172.21.")
+                || h.startsWith("172.22.") || h.startsWith("172.23.")
+                || h.startsWith("172.24.") || h.startsWith("172.25.")
+                || h.startsWith("172.26.") || h.startsWith("172.27.")
+                || h.startsWith("172.28.") || h.startsWith("172.29.")
+                || h.startsWith("172.30.") || h.startsWith("172.31.")) return true;
+            // 0.0.0.0 / 169.254.x.x (链路本地)
+            if (h.startsWith("0.0.0.0") || h.startsWith("169.254.")) return true;
+            return false;
+        } catch (Exception e) {
+            return true;
         }
     }
 
@@ -87,9 +118,10 @@ public class WebReaderServiceImpl implements WebReaderService {
             truncatedContent = content.substring(0, 3000) + "\n\n（内容过长，已截取前3000字）";
         }
 
-        // 使用 AI 进行摘要
-        String prompt = "请阅读以下网页内容，总结文章的核心要点（3-5条），包括主要观点、关键数据和结论：\n\n" + truncatedContent;
-        String summary = aiService.chat(userId, prompt);
+        // 使用 AI 进行摘要（chatDetached 不落史，避免把合成提示词污染真实对话上下文）
+        String prompt = "请阅读以下网页内容，总结文章的核心要点（3-5条），包括主要观点、关键数据和结论。"
+            + "直接根据以下正文内容总结即可，无需联网搜索：\n\n" + truncatedContent;
+        String summary = aiService.chatDetached(userId, prompt);
 
         return "📰 文章摘要\n" +
                "━━━━━━━━━━━━━━━\n" +
@@ -116,26 +148,43 @@ public class WebReaderServiceImpl implements WebReaderService {
         HttpResponse<InputStream> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
         if (response.statusCode() != 200) {
+            response.body().close();
             throw new IOException("HTTP 状态码：" + response.statusCode());
         }
 
-        // 检测编码
-        Charset charset = detectCharset(response);
-
+        // 读取 body（限制大小，防止坏 URL 撑爆内存）
+        byte[] body;
         try (InputStream is = response.body()) {
-            return new String(is.readAllBytes(), charset);
+            body = is.readNBytes(MAX_BODY_BYTES + 1);
         }
+        if (body.length > MAX_BODY_BYTES) {
+            throw new IOException("网页内容过大（超过 " + MAX_BODY_BYTES + " 字节），已中止抓取。");
+        }
+
+        // 检测编码：HTTP 头优先，其次 HTML meta charset，最后 UTF-8
+        Charset charset = detectCharset(response.headers().firstValue("Content-Type").orElse(""), body);
+        return new String(body, charset);
     }
 
-    private Charset detectCharset(HttpResponse<InputStream> response) {
+    /** 响应体大小上限：5MB */
+    private static final int MAX_BODY_BYTES = 5 * 1024 * 1024;
+
+    private Charset detectCharset(String contentType, byte[] body) {
         // 1. 从 HTTP 响应头获取
-        String contentType = response.headers().firstValue("Content-Type").orElse("");
         Matcher matcher = CONTENT_TYPE_CHARSET.matcher(contentType);
         if (matcher.find()) {
             try {
                 return Charset.forName(matcher.group(1));
             } catch (Exception ignored) {}
         }
+        // 2. 从 HTML <meta charset> 获取（GBK/GB2312 页面关键）
+        try {
+            String head = new String(body, 0, Math.min(body.length, 4096), StandardCharsets.ISO_8859_1);
+            Matcher metaMatcher = CHARSET_META.matcher(head);
+            if (metaMatcher.find()) {
+                return Charset.forName(metaMatcher.group(1).strip());
+            }
+        } catch (Exception ignored) {}
         return StandardCharsets.UTF_8;
     }
 

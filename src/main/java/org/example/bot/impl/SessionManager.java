@@ -75,6 +75,12 @@ public class SessionManager {
         return userSessions.computeIfAbsent(sessionName, k -> new Session(sessionName, defaultPersona));
     }
 
+    /** 获取当前会话名（公开方法，供外部读取当前会话标识） */
+    public synchronized String currentSessionName(String userId) {
+        String name = currentSession.get(userId);
+        return name != null ? name : "默认";
+    }
+
     /** 创建新会话并切换过去 */
     public synchronized Session createSession(String userId, String name) {
         name = name.strip();
